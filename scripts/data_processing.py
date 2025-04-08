@@ -5,13 +5,11 @@ from concurrent.futures import ProcessPoolExecutor
 import logging
 import datetime
 import re
-from datetime import datetime
 import math  # Added for split calculation
 import sys  # Import sys
 
 # Use root logger - configuration handled by main script
 logger = logging.getLogger("DataProcessing")
-
 
 
 def process_file(input_path, output_dir, filter_complete_days, filter_usd_only):
@@ -456,34 +454,62 @@ def process_data(
 
 # Main execution block
 if __name__ == "__main__":
-    # Configure logging ONLY if run as main script
-    # Assumes utils.py exists relative to project root
+    # --- Logging Setup --- #
     try:
-        # Attempt relative import suitable for when run as module (-m)
-        from ..src.utils.utils import setup_global_logging
+        from src.utils.utils import setup_global_logging
     except ImportError:
-        # Fallback if run directly and src is in PYTHONPATH or similar
-        try:
-            from src.utils.utils import setup_global_logging
-        except ImportError:
-            # Basic config if setup function not found
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-                handlers=[logging.StreamHandler(sys.stdout)],
-            )
-            logging.warning("Could not find setup_global_logging, using basic config.")
-            setup_global_logging = None  # Mark as unavailable
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[logging.StreamHandler(sys.stdout)],
+        )
+        logging.warning("Could not find setup_global_logging, using basic config.")
+        setup_global_logging = None
 
     if setup_global_logging:
         log_file = Path("logs") / "data_processing.log"
         log_file.parent.mkdir(exist_ok=True)
         setup_global_logging(log_file_path=log_file, root_level=logging.INFO)
 
-    # Set path relative to project root when run directly or as module
-    base_dir = Path(__file__).resolve().parent.parent  # Assumes script is in /scripts
-    raw_data_dir = base_dir / "data" / "raw"  # Correct path relative to project root
-    output_dir = base_dir / "data" / "processed"
+    # --- Configuration Loading --- #
+    base_dir = Path(__file__).resolve().parent.parent  # Project root
+    config_path = base_dir / "pyproject.toml"
+    config = {}
+    try:
+        import toml  # Use built-in toml parser (Python 3.11+)
+
+        if config_path.exists():
+            config = toml.load(config_path).get("tool", {}).get("data_processing", {})
+            logger.info(f"Loaded configuration from {config_path}")
+        else:
+            logger.warning(
+                f"Configuration file {config_path} not found. Using script defaults."
+            )
+    except ImportError:
+        logger.warning(
+            "toml library not available (requires Python 3.11+). Using script defaults."
+        )
+    except Exception as e:
+        logger.error(
+            f"Error loading configuration from {config_path}: {e}. Using script defaults."
+        )
+
+    # Get parameters from config or use defaults
+    raw_data_dir = base_dir / config.get("raw_dir", "data/raw")
+    output_dir = base_dir / config.get("output_dir", "data/processed")
+    max_workers = config.get("max_workers", 24)
+    filter_complete_days = config.get("filter_complete_days", True)
+    clear_output = config.get("clear_output", True)
+    filter_usd_only = config.get("filter_usd_only", True)
+    # Handle null year_filter from TOML correctly (None in Python)
+    year_filter_toml = config.get("year_filter", None)
+    year_filter = str(year_filter_toml) if year_filter_toml is not None else None
+    perform_split = config.get("perform_split", True)
+    train_ratio = config.get("train_ratio", 0.9)
+    val_ratio = config.get("val_ratio", 0.025)
+    train_subdir = config.get("train_subdir", "train")
+    val_subdir = config.get("val_subdir", "validation")
+    test_subdir = config.get("test_subdir", "test")
 
     logger.info(
         f"Running data processing. Raw dir: {raw_data_dir}, Output dir: {output_dir}"
@@ -492,15 +518,15 @@ if __name__ == "__main__":
     process_data(
         raw_dir=str(raw_data_dir),
         output_dir=str(output_dir),
-        max_workers=24,
-        filter_complete_days=True,
-        clear_output=True,
-        filter_usd_only=True,
-        year_filter=None,  # Set to specific year (e.g., '2025') to process only that year
-        perform_split=True,  # Enable the train/val/test split
-        train_ratio=0.9,  # 90% train
-        val_ratio=0.025,  # 5% validation (remaining 5% is test)
-        train_subdir="train",  # Subdirectory for training data
-        val_subdir="validation",  # Subdirectory for validation data
-        test_subdir="test",  # Subdirectory for testing data
+        max_workers=max_workers,
+        filter_complete_days=filter_complete_days,
+        clear_output=clear_output,
+        filter_usd_only=filter_usd_only,
+        year_filter=year_filter,
+        perform_split=perform_split,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        train_subdir=train_subdir,
+        val_subdir=val_subdir,
+        test_subdir=test_subdir,
     )

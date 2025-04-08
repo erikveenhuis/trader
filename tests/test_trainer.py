@@ -12,7 +12,7 @@ try:
     from agent import RainbowDQNAgent, ACCOUNT_STATE_DIM
     from env import TradingEnv
     from data import DataManager
-    from metrics import PerformanceTracker, calculate_composite_score
+    from metrics import calculate_composite_score
 except ImportError as e:
     pytest.skip(
         f"Skipping trainer tests due to import error: {e}", allow_module_level=True

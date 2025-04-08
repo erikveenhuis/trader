@@ -310,7 +310,6 @@ class RainbowTrainerModule:
                     ), "Agent action is out of bounds"
 
                 # Take action in environment
-                # logger.debug(f"  Ep {episode+1} Step {steps}: Selecting action {action}. Running env.step...") # REMOVED DEBUG
                 try:
                     next_obs, reward, done, _, info = env.step(action)
                     # --- Assert env.step outputs ---
@@ -349,8 +348,6 @@ class RainbowTrainerModule:
                         obs, info if "info" in locals() else {}
                     )  # Get fallback info
 
-                # logger.debug(f"  Ep {episode+1} Step {steps}: env.step finished. Reward: {reward:.4f}, Done: {done}") # REMOVED DEBUG
-
                 # Track portfolio value
                 self.performance_tracker.update(
                     portfolio_value=info["portfolio_value"],
@@ -380,7 +377,6 @@ class RainbowTrainerModule:
                     and total_train_steps > self.warmup_steps
                     and total_train_steps % self.update_freq == 0
                 ):
-                    # logger.debug(f"  Ep {episode+1} Step {steps}: Calling agent.learn(). Total steps: {total_train_steps}") # REMOVED DEBUG
                     try:
                         loss_value = self.agent.learn()
                         if loss_value is not None:
@@ -397,7 +393,6 @@ class RainbowTrainerModule:
                         )
                         logger.exception(e)
                         done = True
-                    # logger.debug(f"  Ep {episode+1} Step {steps}: agent.learn() finished. Loss: {loss_value if 'loss_value' in locals() and loss_value is not None else 'N/A'}") # REMOVED DEBUG
 
                 # Log step info (reduced frequency maybe)
                 # Capture the reward from the step *before* potentially averaging

@@ -24,13 +24,6 @@ def find_latest_checkpoint(
         )
         return best_path
 
-    # Fallback: Find any checkpoint with the prefix (less reliable for resuming)
-    # checkpoint_files = sorted(glob.glob(os.path.join(model_dir, f"{model_prefix}_*.pt")))
-    # if checkpoint_files:
-    #     latest_file = checkpoint_files[-1]
-    #     logger.warning(f"Specific latest/best not found, using most recent matching file: {latest_file}")
-    #     return latest_file
-
     logger.warning("No suitable checkpoint file found.")
     return None
 

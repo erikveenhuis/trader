@@ -658,33 +658,24 @@ class RainbowDQNAgent:
         self.optimizer.zero_grad()
         loss.backward()
 
-        # --- Start: Conditional Gradient Check --- #
         if self.debug_mode:
-            # Check for NaN/Inf gradients *before* clipping
-            finite_grads_before = True
             for p in self.network.parameters():
                 if p.grad is not None and not torch.isfinite(p.grad).all():
                     logger.error(
                         f"NaN or Inf detected in gradients BEFORE clipping for parameter: {p.shape}"
                     )
-                    finite_grads_before = False
-        # --- End: Conditional Gradient Check --- #
 
         # Clip gradients
         torch.nn.utils.clip_grad_norm_(
             self.network.parameters(), max_norm=self.grad_clip_norm
         )
 
-        # --- Start: Conditional Gradient Check Post-Clipping --- #
         if self.debug_mode:
-            finite_grads_after = True
             for p in self.network.parameters():
                 if p.grad is not None and not torch.isfinite(p.grad).all():
                     logger.error(
                         f"NaN or Inf detected in gradients AFTER clipping (Max Norm: {self.grad_clip_norm}) for parameter: {p.shape}"
                     )
-                    finite_grads_after = False
-        # --- End: Conditional Gradient Check Post-Clipping --- #
 
         self.optimizer.step()
 

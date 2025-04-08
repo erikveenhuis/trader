@@ -4,3 +4,25 @@
     # Or using the general python analysis setting:
     [tool.pyright] # Pylance uses Pyright engine
     extraPaths = ["./src"]
+
+# --- Ruff Linter/Formatter Configuration --- #
+[tool.ruff]
+line-length = 128 # Match black's default
+
+[tool.ruff.lint]
+# Select a base set of rules (e.g., pyflakes, pycodestyle errors/warnings)
+select = [
+    "E",  # pycodestyle errors
+    "F",  # Pyflakes errors (undefined names, unused imports/variables, etc.)
+    "W",  # pycodestyle warnings (indentation, whitespace - optional)
+    # Add other rule sets you find useful (e.g., "I" for isort, "B" for flake8-bugbear)
+]
+
+# Ignore specific rules globally if desired
+ignore = ["E501"] # Ignore line length errors globally
+
+# Define per-file ignores (often useful for tests)
+[tool.ruff.lint.per-file-ignores]
+"tests/**.py" = [
+    "F841", # Ignore unused local variables in test files
+]
