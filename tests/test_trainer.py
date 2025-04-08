@@ -2,20 +2,10 @@ import pytest
 import torch
 import numpy as np
 import os
-import sys
-import shutil
-import json
 import logging # Added for handler setting
 from pathlib import Path
-from unittest.mock import MagicMock, patch, call, ANY
+from unittest.mock import MagicMock, patch, call, ANY, PropertyMock
 import src.trainer # Import the module containing the class/function
-
-# Remove sys.path manipulation
-# --- Re-adding sys.path manipulation for this file due to test structure --- #
-src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src'))
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
-# --- End re-added block ---
 
 try:
     # Use direct imports now
@@ -179,10 +169,15 @@ def trainer(mock_agent, mock_data_manager, default_config, tmp_path):
     val_handler.level = 0 # Set a default level
     
     # Standard trainer instantiation (no patching here)
-    trainer_instance = RainbowTrainerModule(agent=mock_agent, device=torch.device('cpu'),
-                                            data_manager=mock_data_manager, config=config,
-                                            train_log_handler=train_handler,
-                                            validation_log_handler=val_handler)
+    trainer_instance = RainbowTrainerModule(
+        agent=mock_agent, 
+        device=torch.device('cpu'),
+        data_manager=mock_data_manager,
+        config=config,
+        # train_log_handler=train_handler, # Removed
+        # validation_log_handler=val_handler # Removed
+    )
+    
     # Ensure model directory exists
     os.makedirs(trainer_instance.model_dir, exist_ok=True)
     return trainer_instance
@@ -425,4 +420,114 @@ def test_evaluate(trainer, mock_env, mock_agent, default_config):
 def cleanup_test_models():
     yield
     if os.path.exists('test_models'):
-        shutil.rmtree('test_models') 
+        shutil.rmtree('test_models')
+
+# --- New Error Handling Tests ---
+
+def test_train_loop_handles_env_step_exception(trainer, caplog):
+    """Test trainer.train catches and logs exceptions from env.step."""
+    # Create a simple mock env just for this test
+    mock_env = MagicMock(spec=TradingEnv)
+    
+    # Configure reset to return valid initial state with correct shapes
+    obs_shape = (trainer.agent.window_size, trainer.agent.n_features)
+    mock_env.reset.return_value = (
+        {'market_data': np.zeros(obs_shape), 'account_state': np.zeros(2)}, 
+        {'portfolio_value': 10000.0} # Ensure valid initial portfolio
+    )
+    # Mock action space needed for warmup step
+    mock_env.action_space = MagicMock()
+    mock_env.action_space.sample.return_value = 0
+    mock_env.action_space.contains.return_value = True
+
+    # Configure step to raise error immediately
+    mock_env.step.side_effect = RuntimeError("Simulated env.step crash!")
+    
+    caplog.set_level(logging.ERROR)
+    
+    # Run trainer for 1 episode. It should call reset, then step (which crashes).
+    try:
+        trainer.train(
+            env=mock_env, # Pass the mock env
+            num_episodes=1,
+            start_episode=0,
+            start_total_steps=0,
+            initial_best_score=-np.inf,
+            initial_early_stopping_counter=0
+        )
+    except RuntimeError as e:
+        # Catch the exception if the trainer *doesn't* handle it
+        if "Simulated env.step crash!" in str(e):
+            pytest.fail(f"Trainer did not handle env.step exception: {e}")
+        else:
+            raise # Re-raise unexpected errors
+
+    # Assertions
+    mock_env.step.assert_called_once() # Ensure env.step was actually called
+    assert "Error during env.step" in caplog.text
+    assert "Simulated env.step crash!" in caplog.text # Check for specific error message
+
+def test_train_loop_handles_agent_learn_exception(trainer, mock_agent, caplog):
+    """Test trainer.train catches and logs exceptions from agent.learn."""
+    # Create a simple mock env for this test
+    mock_env = MagicMock(spec=TradingEnv)
+    agent = mock_agent # Use the fixture agent
+
+    # Configure env.step to return valid data just once (enough to get past warmup)
+    obs_shape = (agent.window_size, agent.n_features) # Use agent config
+    env_step_return = (
+        {'market_data': np.zeros(obs_shape), 'account_state': np.zeros(2)}, # obs
+        0.1, # reward 
+        False, # done
+        False, # truncated
+        {'portfolio_value': 10100.0, 'transaction_cost': 1.0} # info
+    )
+    # Need enough steps returned to satisfy the loop until learn is called
+    # Let's assume warmup=10, update_freq=4 => learn called at step 14
+    # We need at least 14 successful steps mocked
+    mock_env.step.side_effect = [env_step_return] * (trainer.warmup_steps + trainer.update_freq + 5)
+    
+    mock_env.reset.return_value = (
+        {'market_data': np.zeros(obs_shape), 'account_state': np.zeros(2)}, 
+        {'portfolio_value': 10000.0}
+    )
+    mock_env.action_space = MagicMock()
+    mock_env.action_space.sample.return_value = 0
+    mock_env.action_space.contains.return_value = True
+
+    # Ensure buffer is full enough
+    agent.buffer = MagicMock()
+    agent.batch_size = 4 # Needs to match trainer config or be mocked
+    agent.buffer.__len__.return_value = agent.batch_size
+    # Mock select_action needed by trainer loop
+    agent.select_action.return_value = 1 # Dummy action
+
+    # Patch the agent.learn method to raise an error
+    agent.learn.side_effect = ValueError("Simulated agent learn crash!")
+    # with patch.object(agent, 'learn', side_effect=ValueError("Simulated agent learn crash!")) as mock_learn:
+        
+    caplog.set_level(logging.ERROR)
+
+    # Run trainer long enough to trigger the learn call
+    try:
+        trainer.train(
+            env=mock_env, # Pass the local mock env
+            num_episodes=1, # One episode should be enough
+            start_episode=0,
+            start_total_steps=0,
+            initial_best_score=-np.inf,
+            initial_early_stopping_counter=0
+        )
+    except ValueError as e:
+         if "Simulated agent learn crash!" in str(e):
+             pytest.fail(f"Trainer did not handle agent.learn exception: {e}")
+         else:
+             raise
+
+    # Assertions
+    agent.learn.assert_called() # Ensure learn was actually called
+    # mock_learn.assert_called() 
+    assert "EXCEPTION during learning update" in caplog.text
+    assert "Simulated agent learn crash!" in caplog.text
+
+# --- End New Error Handling Tests --- 

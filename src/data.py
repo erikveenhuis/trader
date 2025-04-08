@@ -1,9 +1,7 @@
-import os
 from pathlib import Path
 import pandas as pd
-from typing import List, Tuple
+from typing import List
 import logging
-from datetime import datetime, timedelta
 import random
 
 # Configure logging # REMOVED
@@ -14,38 +12,52 @@ import random
 logger = logging.getLogger('DataManager')
 
 class DataManager:
-    """Manages data splits for training, validation, and testing."""
-    
-    def __init__(self, base_dir: str = None):
-        if base_dir is None:
-            # Get the absolute path to the workspace
-            resolved_base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        else:
-            resolved_base_dir = base_dir
+    """Manages data loading and organization for training, validation, and test sets."""
+    def __init__(self, base_dir: str = "data", processed_dir_name: str = "processed"):
+        """Initializes the DataManager.
+        
+        Args:
+            base_dir (str): The base directory containing the data structure.
+                            Defaults to "data". Can be overridden (e.g., for tests).
+            processed_dir_name (str): Subdirectory name for processed data (relative to base_dir).
+                                      Defaults to "processed".
+        """
+        self.base_dir = Path(base_dir)
+        
+        # Check for processed data location
+        processed_path_direct = self.base_dir / processed_dir_name
+        processed_path_nested = self.base_dir / "data" / processed_dir_name
 
-        self.base_dir = Path(resolved_base_dir)
-        assert self.base_dir.exists(), f"Base directory not found: {self.base_dir}"
-        assert self.base_dir.is_dir(), f"Base path is not a directory: {self.base_dir}"
-        
-        self.processed_dir = self.base_dir / "data/processed"
-        assert self.processed_dir.exists(), f"Processed data directory not found: {self.processed_dir}"
-        assert self.processed_dir.is_dir(), f"Processed data path is not a directory: {self.processed_dir}"
-        
+        if processed_path_direct.is_dir():
+            self.processed_dir = processed_path_direct
+            logger.info(f"Found processed data directly under base: {self.processed_dir}")
+        elif processed_path_nested.is_dir():
+            self.processed_dir = processed_path_nested
+            logger.info(f"Found processed data nested under base/data: {self.processed_dir}")
+        else:
+            # Raise error if neither is found
+            err_msg = (f"Processed data directory '{processed_dir_name}' not found directly under "
+                       f"'{self.base_dir}' or under '{self.base_dir / 'data'}'. "
+                       f"Checked: {processed_path_direct}, {processed_path_nested}")
+            logger.error(err_msg)
+            raise FileNotFoundError(err_msg)
+            
+        # No longer explicitly storing raw_dir unless needed later
+        # self.processed_dir = self.base_dir / processed_dir_name <-- Old logic removed
+
         self.train_dir = self.processed_dir / "train"
         self.val_dir = self.processed_dir / "validation"
         self.test_dir = self.processed_dir / "test"
-        
-        self.train_files = []
-        self.val_files = []
-        self.test_files = []
-        self._data_organized = False # Flag to track if data has been loaded
-        
-        logger.info(f"Using base directory: {self.base_dir}")
-        logger.info(f"Using processed directory: {self.processed_dir}")
-        logger.info(f"Expecting data in: {self.train_dir}, {self.val_dir}, {self.test_dir}")
-        
-        # Data organization is now lazy-loaded via getter methods
-    
+
+        logger.info(f"DataManager initialized with base directory: {self.base_dir.resolve()}")
+        logger.info(f"  Processed data directory: {self.processed_dir.resolve()}")
+        logger.info(f"  Train directory: {self.train_dir.resolve()}")
+        logger.info(f"  Validation directory: {self.val_dir.resolve()}")
+        logger.info(f"  Test directory: {self.test_dir.resolve()}")
+
+        self._data_organized = False
+        self.train_files: List[Path] = []
+
     # Removed get_file_date method as sorting/splitting is external
     # Removed split_data_by_time method as splitting is external
 

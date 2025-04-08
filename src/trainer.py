@@ -1,24 +1,16 @@
 import torch
-import torch.nn as nn
-import torch.optim as optim
-import torch.nn.functional as F # Import functional for MSE loss
 import numpy as np
 import logging
 import os
 from pathlib import Path
-import glob
 from env import TradingEnv # Updated import
 from agent import RainbowDQNAgent # Assume agent.py is in src
 from data import DataManager # Updated import
-from buffer import PrioritizedReplayBuffer # Updated import, Assume buffer.py is in src
 from metrics import PerformanceTracker, calculate_composite_score # Assume metrics.py is in src
-import random
-from collections import deque # Keep deque for replay buffer
-from typing import List, Tuple, Dict
-from datetime import datetime
-import json
-import logging.handlers # Ensure handlers are importable if needed
-import time
+from collections import deque # Keep deque for performance_tracker
+from typing import List, Dict, Tuple # Added Tuple back
+import json # Keep for saving results
+from datetime import datetime # Added datetime back
 
 # Use root logger - configuration handled by main script
 logger = logging.getLogger('Trainer')
@@ -136,7 +128,6 @@ class RainbowTrainerModule:
               initial_best_score: float, initial_early_stopping_counter: int,
               specific_file: str | None = None):
         """Train the Rainbow DQN agent."""
-        # assert isinstance(env, TradingEnv), "env must be an instance of TradingEnv" # Commented out for mock testing
         assert isinstance(num_episodes, int) and num_episodes > 0, "num_episodes must be a positive integer"
         assert isinstance(start_episode, int) and start_episode >= 0, "start_episode must be a non-negative integer"
         assert isinstance(start_total_steps, int) and start_total_steps >= 0, "start_total_steps must be non-negative"
@@ -175,51 +166,20 @@ class RainbowTrainerModule:
 
         # Modify episode loop to start from loaded episode
         for episode in range(start_episode, num_episodes):
-            # --- Use specific file if provided, otherwise get random --- #
-            data_file_path = None
-            if specific_file:
-                 # Construct full path using DataManager's base directory
-                 relative_path = Path(specific_file)
-                 # Check if the path is already absolute
-                 if relative_path.is_absolute():
-                     data_file_path = relative_path
-                 else:
-                      data_file_path = self.data_manager.base_dir / specific_file
+            logger.info(f"--- Starting Episode {episode + 1}/{num_episodes} ---")
+            # --- REMOVED file path logic --- 
+            # The provided 'env' argument should be used directly.
+            # Ensure the passed env supports reset() for multiple episodes.
 
-                 if not data_file_path.exists():
-                     logger.error(f"Specific file provided does not exist: {data_file_path}. Skipping episode.")
-                     continue
-                 if not data_file_path.is_file():
-                     logger.error(f"Specific path provided is not a file: {specific_file}. Skipping episode.")
-                     continue
-                 logger.info(f"Episode {episode+1}/{num_episodes}: Using specific training file: {data_file_path.name}")
-            else:
-                try:
-                    data_file_path = self.data_manager.get_random_training_file()
-                    logger.info(f"Episode {episode+1}/{num_episodes}: Using random training file: {data_file_path.name}")
-                except FileNotFoundError as e:
-                     logger.error(f"Error finding training data: {e}. Skipping episode.")
-                     continue
-            # ---------------------------------------------------------- #
+            # --- REMOVED internal env creation --- 
+            # try:
+            #      env = TradingEnv(...)
+            # except ...
 
-            # Get a random training file for this episode # REMOVED
+            # Call reset *on the provided env*
             try:
-                 # Create new environment with the selected file (random or specific)
-                env = TradingEnv(
-                    data_path=str(data_file_path),
-                    window_size=self.agent_config['window_size'], # Use agent's config
-                    **self.env_config # Pass initial_balance, transaction_fee, etc.
-                )
-            except FileNotFoundError as e:
-                 logger.error(f"Error finding training data: {e}. Skipping episode.")
-                 continue
-            except Exception as e:
-                 logger.error(f"!!! Exception during env creation for {data_file_path.name} !!!", exc_info=True)
-                 continue
-
-            # Call reset *after* successful env creation, within its own try-except
-            try:
-                 obs, _ = env.reset()
+                 obs, _ = env.reset() # Use the provided env instance
+                 assert isinstance(_['portfolio_value'], (float, np.float32, np.float64)), "Reset info missing valid portfolio_value"
                  # --- Assert observation structure (Moved Here) --- 
                  assert isinstance(obs, dict), "Observation from env.reset() must be a dict"
                  assert 'market_data' in obs and 'account_state' in obs, "Observation missing keys"
@@ -227,7 +187,7 @@ class RainbowTrainerModule:
                  assert isinstance(obs['account_state'], np.ndarray), "Account state is not a numpy array"
                  # --- End Assert --- 
             except Exception as e:
-                 logger.error(f"!!! Exception during env.reset() for {data_file_path.name} !!!", exc_info=True)
+                 logger.error(f"!!! Exception during env.reset() for {env.data_path} !!!", exc_info=True)
                  continue # Skip episode if reset fails
 
             done = False
@@ -235,12 +195,16 @@ class RainbowTrainerModule:
             episode_loss = 0
             steps = 0 # Correctly reset per-episode steps
 
-            # Reset performance tracker for this episode
+            # Reset performance tracker AFTER successful reset and store initial value
             self.performance_tracker = PerformanceTracker()
+            initial_portfolio_value = _['portfolio_value'] # Get initial value from reset info
+            self.performance_tracker.add_initial_value(initial_portfolio_value)
+
             # Initialize deque to store recent step rewards for logging
             recent_step_rewards = deque(maxlen=self.log_freq)
 
             while not done:
+                # logger.debug(f"  Ep {episode+1} Step {steps}: Top of main loop.") # REMOVED DEBUG
                 # --- Assert observation shape before selecting action --- 
                 assert obs['market_data'].shape == (self.agent.window_size, self.agent.n_features), \
                     f"Market data shape mismatch before action selection: Expected {(self.agent.window_size, self.agent.n_features)}, got {obs['market_data'].shape}"
@@ -259,6 +223,7 @@ class RainbowTrainerModule:
                      assert 0 <= action < self.agent.num_actions, "Agent action is out of bounds"
 
                 # Take action in environment
+                # logger.debug(f"  Ep {episode+1} Step {steps}: Selecting action {action}. Running env.step...") # REMOVED DEBUG
                 try:
                     next_obs, reward, done, _, info = env.step(action)
                     # --- Assert env.step outputs --- 
@@ -274,10 +239,11 @@ class RainbowTrainerModule:
                 except Exception as e:
                      logger.error(f"Error during env.step at step {steps} in episode {episode}: {e}", exc_info=True)
                      done = True # End episode if environment crashes
-                     reward = -10 # Penalize env crash
+                     reward = -10.0 # Penalize env crash (ensure float)
                      next_obs = obs # Keep last valid observation
                      info = self._get_fallback_info(obs, info if 'info' in locals() else {}) # Get fallback info
 
+                # logger.debug(f"  Ep {episode+1} Step {steps}: env.step finished. Reward: {reward:.4f}, Done: {done}") # REMOVED DEBUG
 
                 # Track portfolio value
                 self.performance_tracker.update(
@@ -293,7 +259,9 @@ class RainbowTrainerModule:
                 episode_reward += reward
 
                 # Store transition in replay buffer
+                # logger.debug(f"  Ep {episode+1} Step {steps}: Storing transition...") # REMOVED DEBUG
                 self.agent.store_transition(obs, action, reward, next_obs, done)
+                # logger.debug(f"  Ep {episode+1} Step {steps}: Transition stored.") # REMOVED DEBUG
 
                 # Update state
                 obs = next_obs
@@ -302,6 +270,7 @@ class RainbowTrainerModule:
 
                 # Learn from experience - only update if buffer is full enough and after warmup
                 if len(self.agent.buffer) >= self.agent.batch_size and total_train_steps > self.warmup_steps and total_train_steps % self.update_freq == 0:
+                    # logger.debug(f"  Ep {episode+1} Step {steps}: Calling agent.learn(). Total steps: {total_train_steps}") # REMOVED DEBUG
                     try:
                         loss_value = self.agent.learn()
                         if loss_value is not None:
@@ -312,7 +281,7 @@ class RainbowTrainerModule:
                         logger.error(f"!!! EXCEPTION during learning update at step {total_train_steps} !!!")
                         logger.exception(e)
                         done = True
-
+                    # logger.debug(f"  Ep {episode+1} Step {steps}: agent.learn() finished. Loss: {loss_value if 'loss_value' in locals() and loss_value is not None else 'N/A'}") # REMOVED DEBUG
 
                 # Log step info (reduced frequency maybe)
                 # Capture the reward from the step *before* potentially averaging
@@ -351,8 +320,10 @@ class RainbowTrainerModule:
 
             # Run validation if needed
             if val_files and self.should_validate(episode, self.performance_tracker.get_recent_metrics()):
+                # logger.debug(f"Ep {episode+1}: Entering validation block.") # REMOVED DEBUG
                 logger.info(f"--- Running validation after episode {episode + 1} ---")
                 should_stop, validation_score = self.validate(val_files)
+                # logger.debug(f"Ep {episode+1}: Exiting validation block. should_stop={should_stop}, score={validation_score:.4f}") # REMOVED DEBUG
                 
                 # Enhanced logging for validation score comparison
                 logger.info(f"Validation Score Comparison:")
@@ -586,18 +557,22 @@ class RainbowTrainerModule:
         finally:
             pass # Keep finally block for potential future use
 
-    # Add a fallback info getter in case env crashes mid-step
-    def _get_fallback_info(self, obs, last_info):
-         # Try to reconstruct basic info, or return defaults
-         fallback_info = {
-              'step': last_info.get('step', -1) + 1,
-              'price': 0, # Cannot know price reliably
-              'balance': 0, # Cannot know balance reliably
-              'position': 0, # Cannot know position reliably
-              'portfolio_value': last_info.get('portfolio_value', 0) # Keep last known value
-         }
-         return fallback_info
-
+    def _get_fallback_info(self, last_obs: dict, last_info: dict) -> dict:
+        """Provides a fallback info dictionary if env.step crashes."""
+        # Try to get last known portfolio value, default to 0 if unavailable or invalid
+        fallback_portfolio_value = last_info.get('portfolio_value', 0.0)
+        if not isinstance(fallback_portfolio_value, (float, np.float32, np.float64)) or fallback_portfolio_value < 0:
+            fallback_portfolio_value = 0.0
+            
+        return {
+            'step': last_info.get('step', -1),
+            'price': last_info.get('price', 0.0),
+            'balance': last_info.get('balance', 0.0),
+            'position': last_info.get('position', 0.0),
+            'portfolio_value': fallback_portfolio_value, # Ensure valid value
+            'transaction_cost': last_info.get('transaction_cost', 0.0),
+            'error': 'Environment step failed'
+        }
 
     def evaluate(self, env: TradingEnv, render=False):
         """Evaluate the agent on one episode with detailed logging."""

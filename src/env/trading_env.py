@@ -275,7 +275,21 @@ class TradingEnv(gym.Env):
         assert np.isfinite(reward), f"Reward must be finite, but got: {reward}"
 
         self.current_step += 1
-        done = self.current_step >= self.data_len - 1
+        
+        # --- Termination Conditions --- #
+        # 1. Reached end of data
+        end_of_data = self.current_step >= self.data_len - 1
+        # 2. Portfolio value dropped below threshold (e.g., 10% of initial)
+        portfolio_value_threshold = self.initial_balance * 0.10
+        terminated_low_portfolio = current_portfolio_value < portfolio_value_threshold
+        if terminated_low_portfolio:
+            logger.warning(
+                f"Episode terminated early at step {self.current_step} due to low portfolio value: "
+                f"${current_portfolio_value:.2f} (< 10% of initial ${self.initial_balance:.2f})"
+            )
+            
+        done = end_of_data or terminated_low_portfolio
+        # --- End Termination --- #
 
         next_obs = self._get_observation()
         info = self._get_info()

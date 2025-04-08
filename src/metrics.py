@@ -1,6 +1,5 @@
 import numpy as np
-import pandas as pd
-from typing import List, Dict, Any
+from typing import List, Dict
 import logging
 
 logger = logging.getLogger('Metrics')
@@ -113,6 +112,14 @@ class PerformanceTracker:
         self.transaction_costs = []
         self.rewards = []
     
+    def add_initial_value(self, initial_value: float):
+        """Adds the initial portfolio value before the first step."""
+        assert isinstance(initial_value, (float, np.float32, np.float64)) and initial_value >= 0, "Invalid initial portfolio value"
+        if not self.portfolio_values: # Only add if list is empty
+             self.portfolio_values.append(initial_value)
+        else:
+             logger.warning("Attempted to add initial value when portfolio history already exists.")
+
     def update(self, portfolio_value: float, action: float, reward: float, 
                transaction_cost: float = 0.0):
         """Update tracker with new values."""

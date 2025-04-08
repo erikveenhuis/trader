@@ -1,0 +1,6 @@
+    [tool.pylance]
+    extraPaths = ["./src"]
+
+    # Or using the general python analysis setting:
+    [tool.pyright] # Pylance uses Pyright engine
+    extraPaths = ["./src"]

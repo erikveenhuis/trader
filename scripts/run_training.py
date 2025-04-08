@@ -23,7 +23,6 @@ from agent import RainbowDQNAgent
 # Use the new unified logging setup function
 from utils.utils import setup_global_logging, set_seeds, get_random_data_file
 from data import DataManager
-from metrics import PerformanceTracker, calculate_composite_score
 from utils.checkpoint_utils import find_latest_checkpoint, load_checkpoint
 from evaluation import evaluate_on_test_data
 # from hyperparameters import parse_args # Import argument parser
@@ -48,6 +47,7 @@ def run_training(config: dict, data_manager: DataManager):
     resume_training = run_config.get('resume', False)
     num_episodes = run_config.get('episodes', 1000) # Default if not in run config
     specific_file = run_config.get('specific_file', None)
+    skip_evaluation = run_config.get('skip_evaluation', False) # Added check for skip flag
 
     set_seeds(trainer_config['seed'])
     logger.info(f"Running training with config: {config}")
@@ -80,7 +80,7 @@ def run_training(config: dict, data_manager: DataManager):
     start_total_steps = 0
     initial_best_score = -np.inf
     initial_early_stopping_counter = 0
-    optimizer_state = None
+    # optimizer_state = None <-- Removed unused variable
     # Buffer state loading is typically not done, but agent load_model now handles optimizer/steps
     # --- End Initialization ---
 
@@ -215,12 +215,15 @@ def main(): # Remove default config_path
     mode = run_config.get('mode', 'train') # Default to train if not specified
     model_dir = run_config.get('model_dir', 'models')
     eval_model_prefix = run_config.get('eval_model_prefix', f'{model_dir}/rainbow_transformer_best')
+    skip_evaluation = run_config.get('skip_evaluation', False) # Added check for skip flag
+    data_base_dir = run_config.get('data_base_dir', 'data') # Get base dir from config, default to 'data'
     agent_config = config['agent']
     trainer_config = config['trainer']
     env_config = config['environment']
 
     # --- Initialize DataManager ---
-    data_manager = DataManager()
+    # Pass base_dir from config. Processed dir name defaults to 'processed' unless specified.
+    data_manager = DataManager(base_dir=data_base_dir) 
     assert isinstance(data_manager, DataManager), "Failed to initialize DataManager"
 
     os.makedirs(model_dir, exist_ok=True)
@@ -230,13 +233,16 @@ def main(): # Remove default config_path
         assert isinstance(trained_agent, RainbowDQNAgent), "run_training did not return a valid agent"
         assert isinstance(trained_trainer, RainbowTrainerModule), "run_training did not return a valid trainer"
 
-        logger.info("--- Starting Evaluation on Test Data after Training (Rainbow) ---")
-        # Pass necessary config parts to evaluation function
-        evaluate_on_test_data(
-            agent=trained_agent,
-            trainer=trained_trainer, # Trainer might hold metrics or env creation logic
-            config=config # Pass full config for evaluation needs
-        )
+        if not skip_evaluation: # Check the flag before running evaluation
+            logger.info("--- Starting Evaluation on Test Data after Training (Rainbow) ---")
+            # Pass necessary config parts to evaluation function
+            evaluate_on_test_data(
+                agent=trained_agent,
+                trainer=trained_trainer, # Trainer might hold metrics or env creation logic
+                config=config # Pass full config for evaluation needs
+            )
+        else:
+            logger.info("--- Skipping Evaluation on Test Data as per configuration (skip_evaluation=True) ---")
 
     elif mode == 'eval':
         logger.info(f"--- Starting Evaluation Mode (Rainbow) --- ")
@@ -253,6 +259,11 @@ def main(): # Remove default config_path
         logger.info(f"Using device: {device}")
 
         # Instantiate Rainbow agent using loaded config for evaluation
+        # Ensure agent config has the seed for reproducibility during eval if needed
+        if 'seed' not in agent_config and 'trainer' in config and 'seed' in config['trainer']:
+             agent_config['seed'] = config['trainer']['seed']
+             logger.info(f"Added seed {agent_config['seed']} to agent config for evaluation.")
+
         eval_agent = RainbowDQNAgent(config=agent_config, device=device)
         assert isinstance(eval_agent, RainbowDQNAgent), "Failed to instantiate agent for evaluation"
 

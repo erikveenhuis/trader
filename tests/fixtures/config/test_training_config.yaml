@@ -37,7 +37,7 @@ trainer:
   warmup_steps: 10         # Very few warmup steps (Reduced from 50)
   update_freq: 4
   log_freq: 10             # Log more frequently
-  validation_freq: 1       # Validate every episode
+  validation_freq: 2       # Validate only after the last episode (was 1)
   checkpoint_save_freq: 1  # Save checkpoint every episode
   reward_window: 1         # Small reward window
   early_stopping_patience: 1 # Stop very quickly if no improvement

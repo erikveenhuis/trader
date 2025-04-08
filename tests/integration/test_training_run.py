@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 import yaml
 import os
-import random # Added import
 from unittest.mock import patch, MagicMock
 
 # Define project root relative to this test file
@@ -38,136 +37,162 @@ def test_run_training_script_integration(tmp_path):
     with open(TEST_CONFIG_PATH, 'r') as f:
         test_config = yaml.safe_load(f)
 
-    # Update config to use temporary output directories
+    # Update config to use temporary output directories and fixture data path
     test_config['run']['model_dir'] = str(test_model_dir)
-    # Assuming the global logging setup in run_training.py uses a 'logs' dir relative to execution
-    # We rely on the subprocess cwd for logs, but explicitly set model_dir
+    test_config['run']['skip_evaluation'] = True # Add flag to skip eval
+    test_config['run']['data_base_dir'] = str(TEST_FIXTURES_DIR) # Specify fixture data path
 
     # Path for the modified config within tmp_path
     temp_config_path = tmp_path / "temp_test_config.yaml"
     with open(temp_config_path, 'w') as f:
         yaml.dump(test_config, f)
 
-    # --- Mock DataManager setup --- 
-    # Create a mock instance that mimics DataManager behavior with fixture paths
-    mock_dm_instance = MagicMock()
-    mock_dm_instance.base_dir = TEST_FIXTURES_DIR
-    mock_dm_instance.processed_dir = TEST_FIXTURES_DIR / "data/processed"
-    mock_dm_instance.train_dir = TEST_FIXTURES_DIR / "data/processed/train"
-    mock_dm_instance.val_dir = TEST_FIXTURES_DIR / "data/processed/validation"
-    mock_dm_instance.test_dir = TEST_FIXTURES_DIR / "data/processed/test"
-    mock_dm_instance._data_organized = False
-    mock_dm_instance.train_files = []
-    mock_dm_instance.val_files = []
-    mock_dm_instance.test_files = []
+    # --- Run the script as a subprocess --- #
+    command = [
+        sys.executable,             # Use the same python interpreter
+        str(SCRIPT_PATH),
+        "--config_path", str(temp_config_path)
+    ]
 
-    # Define the mocked organize_data method
-    def mock_organize_data(self):
-        self.train_files = sorted(list(self.train_dir.glob("*.csv")))
-        self.val_files = sorted(list(self.val_dir.glob("*.csv")))
-        self.test_files = sorted(list(self.test_dir.glob("*.csv")))
-        if not self.train_files:
-            raise FileNotFoundError(f"Mock DataManager: No train files found in {self.train_dir}")
-        if not self.val_files:
-             raise FileNotFoundError(f"Mock DataManager: No validation files found in {self.val_dir}")
-        # Test files are optional
-        self._data_organized = True
+    print(f"\nRunning command: {' '.join(command)}")
+    print(f"Working directory: {PROJECT_ROOT}")
 
-    # Define mocked getter methods
-    def mock_get_training_files(self):
-        if not self._data_organized: self.organize_data()
-        return self.train_files
+    # --- Set PYTHONPATH for the subprocess ---
+    subprocess_env = os.environ.copy()
+    src_path = str(PROJECT_ROOT / "src")
+    # Prepend src path to existing PYTHONPATH or set it if it doesn't exist
+    subprocess_env["PYTHONPATH"] = f"{src_path}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
+    print(f"Setting PYTHONPATH for subprocess: {subprocess_env['PYTHONPATH']}")
+    # ----------------------------------------
 
-    def mock_get_validation_files(self):
-        if not self._data_organized: self.organize_data()
-        return self.val_files
+    process = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,           # Run from project root for module resolution
+        capture_output=True,
+        text=True,
+        env=subprocess_env,         # Pass the modified environment
+        check=False,                # Handle non-zero exit code manually
+        timeout=60                  # Restore 60-second timeout
+    )
 
-    def mock_get_test_files(self):
-        if not self._data_organized: self.organize_data()
-        return self.test_files
+    # --- Assertions --- #
+    print("\n--- Subprocess stdout --- ")
+    print(process.stdout)
+    print("\n--- Subprocess stderr --- ")
+    print(process.stderr)
+    print("-------------------------")
 
-    def mock_get_random_training_file(self):
-        if not self._data_organized: self.organize_data()
-        if not self.train_files:
-             raise FileNotFoundError("Mock DataManager: No training files to choose from")
-        return random.choice(self.train_files)
+    # Check 1: Successful execution (exit code 0)
+    assert process.returncode == 0, \
+        f"Script execution failed with exit code {process.returncode}. See stderr above."
 
-    # Bind the methods to the mock instance
-    mock_dm_instance.organize_data = mock_organize_data.__get__(mock_dm_instance, MagicMock)
-    mock_dm_instance.get_training_files = mock_get_training_files.__get__(mock_dm_instance, MagicMock)
-    mock_dm_instance.get_validation_files = mock_get_validation_files.__get__(mock_dm_instance, MagicMock)
-    mock_dm_instance.get_test_files = mock_get_test_files.__get__(mock_dm_instance, MagicMock)
-    mock_dm_instance.get_random_training_file = mock_get_random_training_file.__get__(mock_dm_instance, MagicMock)
-    # --- End Mock DataManager setup ---
+    # Check 3: Expected output files in the *temporary* model directory
+    model_files = list(test_model_dir.glob("**/*")) # Search recursively
+    print(f"Files found in temporary model dir ({test_model_dir}): {model_files}")
+    assert any(f.name.startswith(("checkpoint_trainer", "rainbow_transformer")) and f.is_file() for f in model_files), \
+           f"No model checkpoint files (e.g., checkpoint_trainer*.pt, rainbow_transformer*.pt) found in {test_model_dir}"
+    print(f"Model checkpoint files found in {test_model_dir}.")
 
+    # Check 4: Check if the main training log file was created in the standard location
+    # Note: This depends on the logging setup using a fixed relative path 'logs/training.log'
+    # If logging is configured differently (e.g., uses the temp dir), this needs adjustment.
+    expected_log_file = PROJECT_ROOT / "logs" / "training.log"
+    # This assertion might be fragile depending on logging setup
+    # assert expected_log_file.exists(), f"Expected log file not found at {expected_log_file}"
+    # print(f"Standard log file found at {expected_log_file}.")
 
-    # Patch DataManager constructor within the script's context
-    # Target 'scripts.run_training.DataManager' assumes run_training.py does 'from data import DataManager'
-    # and expects 'data' module/package to be findable relative to 'scripts'.
-    # If data.py is in src/, and src/ is added to path or is a package, this might need adjustment.
-    # Let's assume the current structure makes this import work when run from PROJECT_ROOT.
-    patch_target = 'src.data.DataManager'
-    with patch(patch_target) as MockDataManagerConst:
-        # Configure the mock constructor to return our pre-configured instance
-        MockDataManagerConst.return_value = mock_dm_instance
+    print("\nIntegration test completed successfully.")
 
-        # --- Run the script as a subprocess --- #
-        command = [
-            sys.executable,             # Use the same python interpreter
-            str(SCRIPT_PATH),
-            "--config_path", str(temp_config_path)
-        ]
+@pytest.mark.integration
+def test_run_eval_script_integration(tmp_path):
+    """
+    Integration test for the run_training.py script in evaluation mode.
+    - Uses fixture data via config injection.
+    - Runs the script with mode: eval.
+    - Creates dummy model files for the script to load.
+    - Checks for successful execution.
+    """
+    assert SCRIPT_PATH.exists(), f"Training script not found: {SCRIPT_PATH}"
+    assert TEST_CONFIG_PATH.exists(), f"Test config not found: {TEST_CONFIG_PATH}"
+    assert TEST_FIXTURES_DIR.exists(), f"Test fixtures directory not found: {TEST_FIXTURES_DIR}"
+    # Need test data for evaluation
+    assert (TEST_FIXTURES_DIR / "data/processed/test").exists(), "Test test data dir missing"
 
-        print(f"\nRunning command: {' '.join(command)}")
-        print(f"Working directory: {PROJECT_ROOT}")
+    # Create temporary directory for dummy model
+    dummy_model_dir = tmp_path / "dummy_model"
+    dummy_model_dir.mkdir()
+    dummy_model_prefix = dummy_model_dir / "dummy_rainbow_transformer"
 
-        # --- Set PYTHONPATH for the subprocess ---
-        subprocess_env = os.environ.copy()
-        src_path = str(PROJECT_ROOT / "src")
-        # Prepend src path to existing PYTHONPATH or set it if it doesn't exist
-        subprocess_env["PYTHONPATH"] = f"{src_path}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
-        print(f"Setting PYTHONPATH for subprocess: {subprocess_env['PYTHONPATH']}")
-        # ----------------------------------------
+    # Create dummy model files (content doesn't matter for this test, just existence)
+    # Agent expects <prefix>_rainbow_agent.pt and <prefix>_rainbow_config.yaml
+    (dummy_model_prefix.with_suffix(".pt")).touch()
+    # Create a minimal dummy config for the agent load method
+    dummy_agent_config = {
+        'agent': { # Mimic structure expected by agent load
+            'window_size': 60, 'n_features': 5, 'hidden_dim': 32, 'num_actions': 7, 'num_atoms': 51, 'v_min': -10.0, 'v_max': 10.0
+        }
+    }
+    with open(dummy_model_prefix.with_suffix(".yaml"), 'w') as f:
+        yaml.dump(dummy_agent_config, f)
 
-        process = subprocess.run(
-            command,
-            cwd=PROJECT_ROOT,           # Run from project root for module resolution
-            capture_output=True,
-            text=True,
-            env=subprocess_env,         # Pass the modified environment
-            check=False,                # Handle non-zero exit code manually
-            timeout=60                  # Add a 60-second timeout
-        )
+    # Load the base test config and modify for evaluation mode
+    with open(TEST_CONFIG_PATH, 'r') as f:
+        test_config = yaml.safe_load(f)
 
-        # --- Assertions --- #
-        print("\n--- Subprocess stdout --- ")
-        print(process.stdout)
-        print("\n--- Subprocess stderr --- ")
-        print(process.stderr)
-        print("-------------------------")
+    # Update config for eval mode
+    test_config['run']['mode'] = 'eval'
+    test_config['run']['data_base_dir'] = str(TEST_FIXTURES_DIR) # Use fixture data
+    test_config['run']['eval_model_prefix'] = str(dummy_model_prefix)
+    test_config['run']['skip_evaluation'] = False # Ensure evaluation runs
+    # Remove training-specific keys if they might interfere (optional)
+    test_config['run'].pop('episodes', None)
+    test_config['run'].pop('resume', None)
+    # test_config.pop('trainer', None) # DO NOT POP - trainer config (e.g., seed) might still be needed
 
-        # Check 1: Successful execution (exit code 0)
-        assert process.returncode == 0, \
-            f"Script execution failed with exit code {process.returncode}. See stderr above."
+    # Path for the modified eval config within tmp_path
+    temp_eval_config_path = tmp_path / "temp_eval_config.yaml"
+    with open(temp_eval_config_path, 'w') as f:
+        yaml.dump(test_config, f)
 
-        # Check 2: Mock DataManager was instantiated
-        # Since we patched the constructor, this checks if `DataManager()` was called in the script
-        MockDataManagerConst.assert_called_once()
-        print(f"Mock DataManager constructor called successfully.")
+    # --- Run the script as a subprocess --- #
+    command = [
+        sys.executable,
+        str(SCRIPT_PATH),
+        "--config_path", str(temp_eval_config_path)
+    ]
 
-        # Check 3: Expected output files in the *temporary* model directory
-        model_files = list(test_model_dir.glob("**/*")) # Search recursively
-        print(f"Files found in temporary model dir ({test_model_dir}): {model_files}")
-        assert any(f.name.startswith(("checkpoint_trainer", "rainbow_transformer")) and f.is_file() for f in model_files), \
-               f"No model checkpoint files (e.g., checkpoint_trainer*.pt, rainbow_transformer*.pt) found in {test_model_dir}"
-        print(f"Model checkpoint files found in {test_model_dir}.")
+    print(f"\nRunning EVAL command: {' '.join(command)}")
+    print(f"Working directory: {PROJECT_ROOT}")
 
-        # Check 4: Check if the main training log file was created in the standard location
-        # Note: This depends on the logging setup using a fixed relative path 'logs/training.log'
-        # If logging is configured differently (e.g., uses the temp dir), this needs adjustment.
-        expected_log_file = PROJECT_ROOT / "logs" / "training.log"
-        # This assertion might be fragile depending on logging setup
-        # assert expected_log_file.exists(), f"Expected log file not found at {expected_log_file}"
-        # print(f"Standard log file found at {expected_log_file}.")
+    subprocess_env = os.environ.copy()
+    src_path = str(PROJECT_ROOT / "src")
+    subprocess_env["PYTHONPATH"] = f"{src_path}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
+    print(f"Setting PYTHONPATH for subprocess: {subprocess_env['PYTHONPATH']}")
 
-        print("\nIntegration test completed successfully.") 
+    process = subprocess.run(
+        command,
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        env=subprocess_env,
+        check=False,
+        timeout=90 # Allow a bit more time for eval setup/run
+    )
+
+    # --- Assertions --- #
+    print("\n--- Eval Subprocess stdout --- ")
+    print(process.stdout)
+    print("\n--- Eval Subprocess stderr --- ")
+    print(process.stderr)
+    print("-------------------------")
+
+    assert process.returncode == 0, \
+        f"Eval script execution failed with exit code {process.returncode}. See stderr above."
+    
+    # Check stdout for signs of evaluation running
+    assert "Starting Evaluation Mode" in process.stdout
+    assert "EVALUATING RAINBOW MODEL ON TEST DATA" in process.stdout
+    # Check for the specific test file being evaluated (from ACTUAL fixtures)
+    assert "TEST FILE 1/1: 2024-08-28_BTC-USD.csv" in process.stdout
+
+    print("\nEval Integration test completed successfully.") 
