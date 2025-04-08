@@ -1,0 +1,43 @@
+# Configuration for Rainbow DQN Trading Agent Training
+
+agent:
+  # Core RL params
+  gamma: 0.99
+  lr: 0.0001 # Learning rate
+  batch_size: 256
+  replay_buffer_size: 500000
+  target_update_freq: 1000 # Steps to update target network
+
+  # Network architecture
+  window_size: 60
+  n_features: 5
+  hidden_dim: 128
+  num_actions: 7 # Needs to match environment action space
+
+  # Rainbow specific params
+  n_steps: 3          # Multi-step returns
+  num_atoms: 51       # Distributional RL atoms
+  v_min: -10.0        # Distributional RL support min value
+  v_max: 10.0         # Distributional RL support max value
+  alpha: 0.6          # PER priority exponent
+  beta_start: 0.4     # PER importance sampling exponent (initial)
+  beta_frames: 100000 # PER beta annealing frames (steps)
+
+  # Other agent params
+  grad_clip_norm: 10.0 # Gradient clipping norm
+  debug: false        # Enable debug checks (e.g., gradient checks)
+
+environment:
+  initial_balance: 10000.0
+  transaction_fee: 0.001 # Percentage fee
+
+trainer:
+  seed: 42
+  warmup_steps: 50000     # Steps with random actions before training
+  update_freq: 4          # Agent learning update frequency (steps)
+  log_freq: 60            # Logging frequency (steps)
+  validation_freq: 10     # Validation frequency (episodes)
+  checkpoint_save_freq: 10 # Checkpoint save frequency (episodes)
+  reward_window: 10       # Window for averaging episode rewards in logs
+  early_stopping_patience: 10 # Episodes without validation improvement to stop
+  min_validation_threshold: 0.0 # Minimum score change considered improvement 
