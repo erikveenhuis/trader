@@ -1,15 +1,12 @@
-import pytest
 import pandas as pd
 import numpy as np
 import sys
 from pathlib import Path
-import unittest # Import unittest
+import unittest  # Import unittest
 import tempfile
-import os
-import logging
 
 # Remove sys.path manipulation
-# project_root = Path(__file__).resolve().parent.parent.parent 
+# project_root = Path(__file__).resolve().parent.parent.parent
 # sys.path.insert(0, str(project_root))
 
 # Use updated import path
@@ -22,10 +19,11 @@ except ImportError as e:
 
 # Constants for testing
 WINDOW_SIZE = 10
-N_FEATURES = 5 
+N_FEATURES = 5
 ACCOUNT_STATE_DIM = 2
 INITIAL_BALANCE = 10000.0
 TRANSACTION_FEE = 0.001
+
 
 # Helper function to create mock data CSV
 def create_mock_csv(data_dict, temp_dir_path):
@@ -34,45 +32,56 @@ def create_mock_csv(data_dict, temp_dir_path):
     df.to_csv(path, index=False)
     return str(path)
 
-class TestTradingEnvCoreFunctionality(unittest.TestCase): # Inherit from unittest.TestCase
+
+class TestTradingEnvCoreFunctionality(
+    unittest.TestCase
+):  # Inherit from unittest.TestCase
     """Tests core features of the TradingEnv."""
-    
-    def setUp(self): # Rename back to setUp
+
+    def setUp(self):  # Rename back to setUp
         """Sets up the environment for tests in this class."""
         # Create temporary directory for mock data
         self.temp_dir = tempfile.TemporaryDirectory()
         self.mock_data_path = self._create_mock_data(self.temp_dir.name)
-        
+
         self.window_size = WINDOW_SIZE
         self.initial_balance = INITIAL_BALANCE
         self.transaction_fee = TRANSACTION_FEE
-        self.env = self._create_env() # Use helper to create env
+        self.env = self._create_env()  # Use helper to create env
 
     def tearDown(self):
         # Clean up temporary directory
         self.temp_dir.cleanup()
-        if hasattr(self, 'env') and self.env: # Close env if it exists
+        if hasattr(self, "env") and self.env:  # Close env if it exists
             self.env.close()
 
     def _create_mock_data(self, dir_name):
         """Creates standard mock data."""
-        self.num_data_points = WINDOW_SIZE + 15 # Store this for tests
+        self.num_data_points = WINDOW_SIZE + 15  # Store this for tests
         mock_data_dict = {
-            'open': [100.0 + i - 1 for i in range(self.num_data_points)],
-            'high': [100.0 + i + 1 for i in range(self.num_data_points)],
-            'low': [100.0 + i - 2 for i in range(self.num_data_points)],
-            'close': [100.0 + i for i in range(self.num_data_points)], 
-            'volume': [1000.0 + i * 10 for i in range(self.num_data_points)]
+            "open": [100.0 + i - 1 for i in range(self.num_data_points)],
+            "high": [100.0 + i + 1 for i in range(self.num_data_points)],
+            "low": [100.0 + i - 2 for i in range(self.num_data_points)],
+            "close": [100.0 + i for i in range(self.num_data_points)],
+            "volume": [1000.0 + i * 10 for i in range(self.num_data_points)],
         }
         return create_mock_csv(mock_data_dict, dir_name)
 
-    def _create_env(self, data_path=None, window_size=None, initial_balance=None, transaction_fee=None):
+    def _create_env(
+        self,
+        data_path=None,
+        window_size=None,
+        initial_balance=None,
+        transaction_fee=None,
+    ):
         """Helper to initialize environment with overrides."""
         dp = data_path if data_path else self.mock_data_path
         ws = window_size if window_size is not None else self.window_size
         ib = initial_balance if initial_balance is not None else self.initial_balance
         tf = transaction_fee if transaction_fee is not None else self.transaction_fee
-        return TradingEnv(data_path=dp, window_size=ws, initial_balance=ib, transaction_fee=tf)
+        return TradingEnv(
+            data_path=dp, window_size=ws, initial_balance=ib, transaction_fee=tf
+        )
 
     def test_initialization(self):
         """Test environment initialization parameters."""
@@ -85,179 +94,257 @@ class TestTradingEnvCoreFunctionality(unittest.TestCase): # Inherit from unittes
     def test_reset(self):
         """Test environment reset and account state observation."""
         self.env.reset()
-        action = 3 # Buy 100%
+        action = 3  # Buy 100%
         obs_step, reward, done, _, info_step = self.env.step(action)
-        self.assertLess(info_step['balance'], self.initial_balance)
-        self.assertGreater(info_step['position'], 0)
+        self.assertLess(info_step["balance"], self.initial_balance)
+        self.assertGreater(info_step["position"], 0)
 
         obs_reset, info_reset = self.env.reset()
-        
+
         self.assertEqual(self.env.current_step, self.window_size)
         self.assertAlmostEqual(self.env.balance, self.initial_balance, delta=1e-9)
         self.assertAlmostEqual(self.env.position, 0, delta=1e-9)
         self.assertAlmostEqual(self.env.position_price, 0, delta=1e-9)
         self.assertAlmostEqual(self.env.total_transaction_cost, 0, delta=1e-9)
-        self.assertEqual(len(self.env.portfolio_values), 1) 
-        self.assertAlmostEqual(self.env.portfolio_values[0], self.initial_balance, delta=1e-9)
+        self.assertEqual(len(self.env.portfolio_values), 1)
+        self.assertAlmostEqual(
+            self.env.portfolio_values[0], self.initial_balance, delta=1e-9
+        )
 
         self.assertIsInstance(obs_reset, dict)
-        self.assertIn('market_data', obs_reset)
-        self.assertIn('account_state', obs_reset)
-        self.assertEqual(obs_reset['market_data'].shape, (self.window_size, N_FEATURES))
-        self.assertEqual(obs_reset['account_state'].shape, (ACCOUNT_STATE_DIM,))
-        self.assertEqual(obs_reset['market_data'].dtype, np.float32)
-        self.assertEqual(obs_reset['account_state'].dtype, np.float32)
-        self.assertAlmostEqual(obs_reset['account_state'][0], 0.0, delta=1e-6)
-        self.assertAlmostEqual(obs_reset['account_state'][1], 1.0, delta=1e-6)
+        self.assertIn("market_data", obs_reset)
+        self.assertIn("account_state", obs_reset)
+        self.assertEqual(obs_reset["market_data"].shape, (self.window_size, N_FEATURES))
+        self.assertEqual(obs_reset["account_state"].shape, (ACCOUNT_STATE_DIM,))
+        self.assertEqual(obs_reset["market_data"].dtype, np.float32)
+        self.assertEqual(obs_reset["account_state"].dtype, np.float32)
+        self.assertAlmostEqual(obs_reset["account_state"][0], 0.0, delta=1e-6)
+        self.assertAlmostEqual(obs_reset["account_state"][1], 1.0, delta=1e-6)
 
         self.assertIsInstance(info_reset, dict)
         # ... (check info keys) ...
-        self.assertEqual(info_reset['step'], self.window_size)
-        self.assertAlmostEqual(info_reset['balance'], self.initial_balance, delta=1e-9)
-        self.assertAlmostEqual(info_reset['position'], 0, delta=1e-9)
-        self.assertAlmostEqual(info_reset['portfolio_value'], self.initial_balance, delta=1e-9)
-        self.assertAlmostEqual(info_reset['transaction_cost'], 0, delta=1e-9)
+        self.assertEqual(info_reset["step"], self.window_size)
+        self.assertAlmostEqual(info_reset["balance"], self.initial_balance, delta=1e-9)
+        self.assertAlmostEqual(info_reset["position"], 0, delta=1e-9)
+        self.assertAlmostEqual(
+            info_reset["portfolio_value"], self.initial_balance, delta=1e-9
+        )
+        self.assertAlmostEqual(info_reset["transaction_cost"], 0, delta=1e-9)
 
     def test_step_buy(self):
         """Test a single buy step."""
         obs, info = self.env.reset()
-        initial_balance = info['balance']
-        
-        action = 2 # Buy 50%
+        initial_balance = info["balance"]
+
+        action = 2  # Buy 50%
         buy_fraction = 0.5
-        price_at_step = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
-        
+        price_at_step = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
+
         buy_cash = initial_balance * buy_fraction
         cost = buy_cash * self.transaction_fee
         cash_for_crypto = buy_cash - cost
         expected_position = cash_for_crypto / price_at_step
         expected_balance = initial_balance - buy_cash
-        
+
         next_obs, reward, done, truncated, info_step = self.env.step(action)
 
-        self.assertAlmostEqual(info_step['balance'], expected_balance, delta=1e-9)
-        self.assertAlmostEqual(info_step['position'], expected_position, delta=1e-9)
-        self.assertAlmostEqual(info_step['transaction_cost'], cost, delta=1e-9)
+        self.assertAlmostEqual(info_step["balance"], expected_balance, delta=1e-9)
+        self.assertAlmostEqual(info_step["position"], expected_position, delta=1e-9)
+        self.assertAlmostEqual(info_step["transaction_cost"], cost, delta=1e-9)
         self.assertAlmostEqual(self.env.balance, expected_balance, delta=1e-9)
         self.assertAlmostEqual(self.env.position, expected_position, delta=1e-9)
         self.assertAlmostEqual(self.env.total_transaction_cost, cost, delta=1e-9)
 
+
 # NOTE: Nested classes TestEnvRewardComponents etc. are still not handled
 
 
-class TestEnvRewardComponents(TestTradingEnvCoreFunctionality): # Inherit from CoreFunctionality
+class TestEnvRewardComponents(
+    TestTradingEnvCoreFunctionality
+):  # Inherit from CoreFunctionality
 
     def test_reward_components_profit(self):
         """Test reward components when taking profit."""
         obs, info_reset = self.env.reset()
-        portfolio_before_buy = info_reset['portfolio_value'] # 10000
-        price_buy = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)] # 119.0
+        portfolio_before_buy = info_reset["portfolio_value"]  # 10000
+        price_buy = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]  # 119.0
 
         # Buy 50% (action 2)
         action_buy = 2
         _, _, _, _, info_buy = self.env.step(action_buy)
-        portfolio_after_buy_at_buy_price = info_buy['portfolio_value'] # 9995.0 (value at buy price)
-        balance_after_buy = self.env.balance # 5000
-        position_after_buy = self.env.position # 41.974
-        cost_after_buy = info_buy['transaction_cost'] # 5.0
+        portfolio_after_buy_at_buy_price = info_buy[
+            "portfolio_value"
+        ]  # 9995.0 (value at buy price)
+        balance_after_buy = self.env.balance  # 5000
+        position_after_buy = self.env.position  # 41.974
+        cost_after_buy = info_buy["transaction_cost"]  # 5.0
 
         # Price at next step (internal 6, original 15) = 120.0
-        price_sell = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
+        price_sell = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
 
         # Sell 100% (action 6)
         action_sell = 6
         obs_sell, reward_sell, _, _, info_sell = self.env.step(action_sell)
-        step_cost_sell = info_sell['transaction_cost'] - cost_after_buy # 10.037 - 5.0 = 5.037
-        portfolio_final = info_sell['portfolio_value'] # 10031.93
+        step_cost_sell = (
+            info_sell["transaction_cost"] - cost_after_buy
+        )  # 10.037 - 5.0 = 5.037
+        portfolio_final = info_sell["portfolio_value"]  # 10031.93
 
         # Reward calculation uses portfolio before sell (portfolio_after_buy_at_buy_price) and after sell (portfolio_final)
         # Note: The PnL is calculated on portfolio values *at the price where the step occurs*.
-        reward_pnl_exp = np.log(portfolio_final / portfolio_after_buy_at_buy_price) * 1000.0 if portfolio_after_buy_at_buy_price > 1e-9 and portfolio_final > 1e-9 else 0.0 # log(10031.93 / 9995.0) * 1000 = 3.68
-        reward_cost_exp = - (step_cost_sell / self.initial_balance) * 1000.0 # -(5.037 / 10000) * 1000 = -0.5037
-        expected_reward = reward_pnl_exp + reward_cost_exp # 3.68 - 0.5037 = 3.176
+        reward_pnl_exp = (
+            np.log(portfolio_final / portfolio_after_buy_at_buy_price) * 1000.0
+            if portfolio_after_buy_at_buy_price > 1e-9 and portfolio_final > 1e-9
+            else 0.0
+        )  # log(10031.93 / 9995.0) * 1000 = 3.68
+        reward_cost_exp = (
+            -(step_cost_sell / self.initial_balance) * 1000.0
+        )  # -(5.037 / 10000) * 1000 = -0.5037
+        expected_reward = reward_pnl_exp + reward_cost_exp  # 3.68 - 0.5037 = 3.176
 
         self.assertAlmostEqual(reward_sell, expected_reward, delta=1e-3)
 
     def test_reward_components_loss(self):
         """Test reward components when taking a loss."""
         obs, info_reset = self.env.reset()
-        portfolio_start = info_reset['portfolio_value'] # 10000
-        print(f"\nDEBUG (test_reward_components_loss): portfolio_start = {portfolio_start}")
+        portfolio_start = info_reset["portfolio_value"]  # 10000
+        print(
+            f"\nDEBUG (test_reward_components_loss): portfolio_start = {portfolio_start}"
+        )
         price_buy = 109.0
-        price_sell = 110.0 # Use the actual price from setUp mock data for step 6
+        price_sell = 110.0  # Use the actual price from setUp mock data for step 6
 
         # Buy 50% (action 2) at price 109
         action_buy = 2
         _, _, _, _, info_buy = self.env.step(action_buy)
-        position_after_buy = self.env.position # 45.825688...
-        balance_after_buy = self.env.balance # 5000
-        cost_basis = self.env.position_price # 109.0
-        cumulative_cost_after_buy = info_buy['transaction_cost'] # 5.0
-        print(f"DEBUG (test_reward_components_loss): After Buy (price={price_buy}) -> pos={position_after_buy:.4f}, bal={balance_after_buy:.4f}, basis={cost_basis:.4f}, cum_cost={cumulative_cost_after_buy:.4f}")
-        portfolio_after_buy_at_sell_price = info_buy['portfolio_value'] # Use value from info dict (uses price=110) ~10040.8
-        print(f"DEBUG (test_reward_components_loss): portfolio_after_buy_at_sell_price (using info[price]={info_buy.get('price','N/A')}) = {portfolio_after_buy_at_sell_price:.4f}")
+        position_after_buy = self.env.position  # 45.825688...
+        balance_after_buy = self.env.balance  # 5000
+        cost_basis = self.env.position_price  # 109.0
+        cumulative_cost_after_buy = info_buy["transaction_cost"]  # 5.0
+        print(
+            f"DEBUG (test_reward_components_loss): After Buy (price={price_buy}) -> pos={position_after_buy:.4f}, bal={balance_after_buy:.4f}, basis={cost_basis:.4f}, cum_cost={cumulative_cost_after_buy:.4f}"
+        )
+        portfolio_after_buy_at_sell_price = info_buy[
+            "portfolio_value"
+        ]  # Use value from info dict (uses price=110) ~10040.8
+        print(
+            f"DEBUG (test_reward_components_loss): portfolio_after_buy_at_sell_price (using info[price]={info_buy.get('price','N/A')}) = {portfolio_after_buy_at_sell_price:.4f}"
+        )
 
         # Sell 100% (action 6) at price 110
         action_sell = 6
         obs_sell, reward_sell, _, _, info_sell = self.env.step(action_sell)
-        cumulative_cost_after_sell = info_sell['transaction_cost'] # 5.0 + 5.0408... = 10.0408...
-        print(f"DEBUG (test_reward_components_loss): After Sell (price={price_sell}) -> reward={reward_sell:.4f}, cum_cost={cumulative_cost_after_sell:.4f}, final_portfolio={info_sell['portfolio_value']:.4f}")
+        cumulative_cost_after_sell = info_sell[
+            "transaction_cost"
+        ]  # 5.0 + 5.0408... = 10.0408...
+        print(
+            f"DEBUG (test_reward_components_loss): After Sell (price={price_sell}) -> reward={reward_sell:.4f}, cum_cost={cumulative_cost_after_sell:.4f}, final_portfolio={info_sell['portfolio_value']:.4f}"
+        )
         # Calculate portfolio value after sell using the execution price (110)
-        balance_after_sell = self.env.balance # ~10035.78
-        position_after_sell = self.env.position # 0
+        balance_after_sell = self.env.balance  # ~10035.78
+        position_after_sell = self.env.position  # 0
 
         # Calculate expected reward components for the SELL step (action 6, price=110) based on ACTUAL env logic
-        step_cost_sell = cumulative_cost_after_sell - cumulative_cost_after_buy # 5.040825...
-        print(f"DEBUG (test_reward_components_loss): step_cost_sell = {step_cost_sell:.4f}")
+        step_cost_sell = (
+            cumulative_cost_after_sell - cumulative_cost_after_buy
+        )  # 5.040825...
+        print(
+            f"DEBUG (test_reward_components_loss): step_cost_sell = {step_cost_sell:.4f}"
+        )
         # Env uses portfolio value AFTER buy step (using NEXT price, 110) as previous value for sell step's reward
-        previous_portfolio_value_for_sell_reward = portfolio_after_buy_at_sell_price # 10040.825...
-        print(f"DEBUG (test_reward_components_loss): previous_portfolio_value_for_sell_reward = {previous_portfolio_value_for_sell_reward:.4f}")
+        previous_portfolio_value_for_sell_reward = (
+            portfolio_after_buy_at_sell_price  # 10040.825...
+        )
+        print(
+            f"DEBUG (test_reward_components_loss): previous_portfolio_value_for_sell_reward = {previous_portfolio_value_for_sell_reward:.4f}"
+        )
         # Env uses portfolio value AFTER sell step (using CURRENT price, 110) as current value for sell step's reward
         # Need to calculate this manually using the state AFTER the sell step
-        current_portfolio_value_for_sell_reward = self.env.balance + self.env.position * price_sell # 10035.784... + 0 * 110 = 10035.784...
-        print(f"DEBUG (test_reward_components_loss): current_portfolio_value_for_sell_reward = {current_portfolio_value_for_sell_reward:.4f}")
+        current_portfolio_value_for_sell_reward = (
+            self.env.balance + self.env.position * price_sell
+        )  # 10035.784... + 0 * 110 = 10035.784...
+        print(
+            f"DEBUG (test_reward_components_loss): current_portfolio_value_for_sell_reward = {current_portfolio_value_for_sell_reward:.4f}"
+        )
 
-        reward_pnl_exp = np.log(current_portfolio_value_for_sell_reward / previous_portfolio_value_for_sell_reward) * 1000.0 if previous_portfolio_value_for_sell_reward > 1e-9 and current_portfolio_value_for_sell_reward > 1e-9 else 0.0 # log(10035.78 / 10040.82) * 1000 = -0.502...
-        print(f"DEBUG (test_reward_components_loss): reward_pnl_exp = {reward_pnl_exp:.4f}")
-        reward_cost_exp = - (step_cost_sell / self.initial_balance) * 1000.0 if self.initial_balance > 1e-9 else 0.0 # -(5.0408 / 10000) * 1000 = -0.504...
-        print(f"DEBUG (test_reward_components_loss): reward_cost_exp = {reward_cost_exp:.4f}")
-        expected_reward = reward_pnl_exp + reward_cost_exp # Approx -1.006...
-        print(f"DEBUG (test_reward_components_loss): final calculated expected_reward = {expected_reward:.4f}")
+        reward_pnl_exp = (
+            np.log(
+                current_portfolio_value_for_sell_reward
+                / previous_portfolio_value_for_sell_reward
+            )
+            * 1000.0
+            if previous_portfolio_value_for_sell_reward > 1e-9
+            and current_portfolio_value_for_sell_reward > 1e-9
+            else 0.0
+        )  # log(10035.78 / 10040.82) * 1000 = -0.502...
+        print(
+            f"DEBUG (test_reward_components_loss): reward_pnl_exp = {reward_pnl_exp:.4f}"
+        )
+        reward_cost_exp = (
+            -(step_cost_sell / self.initial_balance) * 1000.0
+            if self.initial_balance > 1e-9
+            else 0.0
+        )  # -(5.0408 / 10000) * 1000 = -0.504...
+        print(
+            f"DEBUG (test_reward_components_loss): reward_cost_exp = {reward_cost_exp:.4f}"
+        )
+        expected_reward = reward_pnl_exp + reward_cost_exp  # Approx -1.006...
+        print(
+            f"DEBUG (test_reward_components_loss): final calculated expected_reward = {expected_reward:.4f}"
+        )
 
-        # --- DEBUG PRINTS --- 
-        print(f"\nDEBUG: test_reward_components_loss")
+        # --- DEBUG PRINTS ---
+        print("\nDEBUG: test_reward_components_loss")
         print(f"  Actual reward_sell: {reward_sell}")
         print(f"  Calculated expected_reward: {expected_reward}")
-        # --- END DEBUG --- 
+        # --- END DEBUG ---
 
         # Use the calculated expected_reward based on env logic and correct price
-        self.assertAlmostEqual(reward_sell, expected_reward, delta=1e-3) 
+        self.assertAlmostEqual(reward_sell, expected_reward, delta=1e-3)
 
     def test_reward_components_cost_penalty(self):
         """Test reward calculation includes cost penalty."""
         obs_reset, info_reset = self.env.reset()
-        portfolio_start = info_reset['portfolio_value'] # 10000
+        portfolio_start = info_reset["portfolio_value"]  # 10000
         # Price at internal step 5 (index 14 in original data) = 119.0
-        price_buy = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
+        price_buy = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
 
         # Buy 50% (action 2)
         action_buy = 2
         obs_buy, reward_buy, _, _, info_buy = self.env.step(action_buy)
-        balance_after_buy = self.env.balance # 5000.0
-        position_after_buy = self.env.position # 41.9747899
-        step_cost_buy = info_buy['transaction_cost'] # 5.0
+        balance_after_buy = self.env.balance  # 5000.0
+        position_after_buy = self.env.position  # 41.9747899
+        step_cost_buy = info_buy["transaction_cost"]  # 5.0
 
         # Reward calculation uses portfolio before (portfolio_start) and after buy (at price_buy)
-        portfolio_after_buy_at_price_buy = balance_after_buy + position_after_buy * price_buy # 5000 + 41.974 * 119 = 9995.0
+        portfolio_after_buy_at_price_buy = (
+            balance_after_buy + position_after_buy * price_buy
+        )  # 5000 + 41.974 * 119 = 9995.0
 
-        reward_pnl_exp = np.log(portfolio_after_buy_at_price_buy / portfolio_start) * 1000.0 if portfolio_start > 1e-9 and portfolio_after_buy_at_price_buy > 1e-9 else 0.0 # log(9995 / 10000) * 1000 = -5.001
-        reward_cost_exp = - (step_cost_buy / self.initial_balance) * 1000.0 if self.initial_balance > 1e-9 else 0.0 # -(5.0 / 10000) * 1000 = -0.5
-        expected_reward = reward_pnl_exp + reward_cost_exp # -5.001 - 0.5 = -5.501
+        reward_pnl_exp = (
+            np.log(portfolio_after_buy_at_price_buy / portfolio_start) * 1000.0
+            if portfolio_start > 1e-9 and portfolio_after_buy_at_price_buy > 1e-9
+            else 0.0
+        )  # log(9995 / 10000) * 1000 = -5.001
+        reward_cost_exp = (
+            -(step_cost_buy / self.initial_balance) * 1000.0
+            if self.initial_balance > 1e-9
+            else 0.0
+        )  # -(5.0 / 10000) * 1000 = -0.5
+        expected_reward = reward_pnl_exp + reward_cost_exp  # -5.001 - 0.5 = -5.501
 
         self.assertAlmostEqual(reward_buy, expected_reward, delta=1e-3)
 
 
-class TestEnvActions(TestTradingEnvCoreFunctionality): # Inherit from CoreFunctionality
+class TestEnvActions(TestTradingEnvCoreFunctionality):  # Inherit from CoreFunctionality
 
     # Action definitions based on TradingEnv:
     # 0: Hold
@@ -272,23 +359,27 @@ class TestEnvActions(TestTradingEnvCoreFunctionality): # Inherit from CoreFuncti
         """Test action 1 (Buy 25%)."""
         obs, info = self.env.reset()
         action = 1
-        
+
         # Get the price the env WILL use for this step
-        price_for_step = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
-        self.assertGreater(price_for_step, 1e-9) # Ensure valid price
+        price_for_step = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
+        self.assertGreater(price_for_step, 1e-9)  # Ensure valid price
 
         balance_before = self.initial_balance
-        buy_amount_cash = balance_before * 0.25 
-        step_transaction_cost = buy_amount_cash * self.transaction_fee 
-        cash_for_crypto = buy_amount_cash - step_transaction_cost 
-        expected_position = cash_for_crypto / price_for_step 
-        expected_balance = balance_before - buy_amount_cash 
+        buy_amount_cash = balance_before * 0.25
+        step_transaction_cost = buy_amount_cash * self.transaction_fee
+        cash_for_crypto = buy_amount_cash - step_transaction_cost
+        expected_position = cash_for_crypto / price_for_step
+        expected_balance = balance_before - buy_amount_cash
 
         _, _, _, _, info_step = self.env.step(action)
 
         self.assertAlmostEqual(self.env.position, expected_position, places=5)
         self.assertAlmostEqual(self.env.balance, expected_balance, places=5)
-        self.assertAlmostEqual(info_step['transaction_cost'], step_transaction_cost, places=5)
+        self.assertAlmostEqual(
+            info_step["transaction_cost"], step_transaction_cost, places=5
+        )
         # First buy, cost basis should be the buy price
         self.assertAlmostEqual(self.env.position_price, price_for_step, places=5)
 
@@ -297,27 +388,31 @@ class TestEnvActions(TestTradingEnvCoreFunctionality): # Inherit from CoreFuncti
         obs, info = self.env.reset()
         # Buy 100% first
         action_buy = 3
-        price_buy = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
+        price_buy = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
         self.env.step(action_buy)
-        position_after_buy = self.env.position 
-        balance_after_buy = self.env.balance 
-        cost_basis = self.env.position_price # Should be price_buy
+        position_after_buy = self.env.position
+        balance_after_buy = self.env.balance
+        cost_basis = self.env.position_price  # Should be price_buy
         self.assertAlmostEqual(cost_basis, price_buy, places=5)
 
         # Now sell 25%
         action_sell = 4
-        price_sell = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
+        price_sell = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
         self.assertGreater(price_sell, 1e-9)
 
         sell_fraction = 0.25
-        sell_amount_crypto = position_after_buy * sell_fraction 
-        cash_before_fee = sell_amount_crypto * price_sell 
-        step_transaction_cost = cash_before_fee * self.transaction_fee 
-        cash_change = cash_before_fee - step_transaction_cost 
-        position_change = -sell_amount_crypto 
+        sell_amount_crypto = position_after_buy * sell_fraction
+        cash_before_fee = sell_amount_crypto * price_sell
+        step_transaction_cost = cash_before_fee * self.transaction_fee
+        cash_change = cash_before_fee - step_transaction_cost
+        position_change = -sell_amount_crypto
 
-        expected_position = position_after_buy + position_change 
-        expected_balance = balance_after_buy + cash_change 
+        expected_position = position_after_buy + position_change
+        expected_balance = balance_after_buy + cash_change
 
         _, _, _, _, info_step = self.env.step(action_sell)
 
@@ -325,9 +420,9 @@ class TestEnvActions(TestTradingEnvCoreFunctionality): # Inherit from CoreFuncti
         self.assertAlmostEqual(self.env.balance, expected_balance, places=4)
         # Basis shouldn't change on sell unless position becomes zero
         if expected_position > 1e-9:
-            self.assertAlmostEqual(self.env.position_price, cost_basis, places=4) 
+            self.assertAlmostEqual(self.env.position_price, cost_basis, places=4)
         else:
-             self.assertAlmostEqual(self.env.position_price, 0, places=4)
+            self.assertAlmostEqual(self.env.position_price, 0, places=4)
 
     def test_cost_basis_multiple_buys(self):
         """Test average cost basis calculation after multiple buys."""
@@ -335,43 +430,51 @@ class TestEnvActions(TestTradingEnvCoreFunctionality): # Inherit from CoreFuncti
 
         # Buy 1: 25% (action 1)
         action1 = 1
-        price1 = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
+        price1 = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
         _, _, _, _, info1 = self.env.step(action1)
-        pos1 = self.env.position 
-        bal1 = self.env.balance 
-        basis1 = self.env.position_price 
-        cost1 = info1['transaction_cost'] 
+        pos1 = self.env.position
+        bal1 = self.env.balance
+        basis1 = self.env.position_price
+        cost1 = info1["transaction_cost"]
         self.assertAlmostEqual(basis1, price1, places=4)
 
         # Buy 2: 50% of *remaining* balance (action 2)
         action2 = 2
-        price2 = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
-        balance_before_buy2 = bal1 
-        buy_amount_cash2 = balance_before_buy2 * 0.5 
-        step_cost2 = buy_amount_cash2 * self.transaction_fee 
-        cash_for_crypto2 = buy_amount_cash2 - step_cost2 
-        pos_change2 = cash_for_crypto2 / price2 
+        price2 = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
+        balance_before_buy2 = bal1
+        buy_amount_cash2 = balance_before_buy2 * 0.5
+        step_cost2 = buy_amount_cash2 * self.transaction_fee
+        cash_for_crypto2 = buy_amount_cash2 - step_cost2
+        pos_change2 = cash_for_crypto2 / price2
 
         # Expected average cost basis calculation
-        old_value = pos1 * basis1 
-        new_value = pos_change2 * price2 
-        total_position = pos1 + pos_change2 
+        old_value = pos1 * basis1
+        new_value = pos_change2 * price2
+        total_position = pos1 + pos_change2
         # Avoid division by zero if total position is somehow zero
-        expected_basis2 = (old_value + new_value) / total_position if total_position > 1e-9 else 0
+        expected_basis2 = (
+            (old_value + new_value) / total_position if total_position > 1e-9 else 0
+        )
 
         _, _, _, _, info2 = self.env.step(action2)
 
         expected_pos2 = total_position
-        expected_bal2 = balance_before_buy2 - buy_amount_cash2 
+        expected_bal2 = balance_before_buy2 - buy_amount_cash2
 
         self.assertAlmostEqual(self.env.position, expected_pos2, places=4)
         self.assertAlmostEqual(self.env.balance, expected_bal2, places=4)
         self.assertAlmostEqual(self.env.position_price, expected_basis2, places=4)
-        expected_cum_cost2 = cost1 + step_cost2 
-        self.assertAlmostEqual(info2['transaction_cost'], expected_cum_cost2, places=4)
+        expected_cum_cost2 = cost1 + step_cost2
+        self.assertAlmostEqual(info2["transaction_cost"], expected_cum_cost2, places=4)
 
 
-class TestEnvInternals(TestTradingEnvCoreFunctionality): # Inherit from CoreFunctionality
+class TestEnvInternals(
+    TestTradingEnvCoreFunctionality
+):  # Inherit from CoreFunctionality
 
     def test_normalization_values(self):
         """Test the output of the normalization process."""
@@ -379,11 +482,11 @@ class TestEnvInternals(TestTradingEnvCoreFunctionality): # Inherit from CoreFunc
         num_points = 10
         window_size = 3
         mock_data_dict = {
-            'open': [10.0] * num_points,
-            'high': [float(10 + i) for i in range(num_points)], # 10 to 19
-            'low': [5.0] * num_points,
-            'close': [float(i) for i in range(num_points)], # 0 to 9
-            'volume': [100.0] * num_points
+            "open": [10.0] * num_points,
+            "high": [float(10 + i) for i in range(num_points)],  # 10 to 19
+            "low": [5.0] * num_points,
+            "close": [float(i) for i in range(num_points)],  # 0 to 9
+            "volume": [100.0] * num_points,
         }
         mock_path = create_mock_csv(mock_data_dict, self.temp_dir.name)
         env = self._create_env(data_path=mock_path, window_size=window_size)
@@ -392,7 +495,7 @@ class TestEnvInternals(TestTradingEnvCoreFunctionality): # Inherit from CoreFunc
         # This corresponds to original data index 5+3-1 = 7
         # The window includes original indices 5, 6, 7
         # Prices: high=[15, 16, 17], close=[5, 6, 7]
-        obs = env._get_observation() # This uses current_step=window_size=3
+        obs = env._get_observation()  # This uses current_step=window_size=3
 
         # Let's advance the environment step manually for testing internal arrays
         env.current_step = 5
@@ -406,52 +509,68 @@ class TestEnvInternals(TestTradingEnvCoreFunctionality): # Inherit from CoreFunc
         # Step 5 corresponds to index 5 in the normalized array (after dropping NaNs)
         # The original data had 10 rows. After normalization with window=3, first 2 rows are dropped.
         # So, original index 2 -> norm index 0, orig index 5 -> norm index 3
-        norm_index = env.current_step - window_size # 5 - 3 = 2
+        norm_index = env.current_step - window_size  # 5 - 3 = 2
         norm_data_step = env.norm_data_array[norm_index]
-        self.assertAlmostEqual(norm_data_step[1], 1.0) # norm_high
-        self.assertAlmostEqual(norm_data_step[3], 1.0) # norm_close
+        self.assertAlmostEqual(norm_data_step[1], 1.0)  # norm_high
+        self.assertAlmostEqual(norm_data_step[3], 1.0)  # norm_close
 
     def test_observation_account_state(self):
         """Test the normalized account state values in observations."""
         obs_reset, info_reset = self.env.reset()
         # Initial state: 0 position, balance=initial
-        self.assertAlmostEqual(obs_reset['account_state'][0], 0.0) # Normalized position
-        self.assertAlmostEqual(obs_reset['account_state'][1], 1.0 if self.initial_balance > 1e-9 else 0.0) # Initial balance normalized
+        self.assertAlmostEqual(
+            obs_reset["account_state"][0], 0.0
+        )  # Normalized position
+        self.assertAlmostEqual(
+            obs_reset["account_state"][1], 1.0 if self.initial_balance > 1e-9 else 0.0
+        )  # Initial balance normalized
 
         # Price at internal step 5 (index 14 in original data) = 119.0
-        price_buy = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
+        price_buy = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
 
         # Buy 50% (action 2)
         action_buy = 2
         obs_buy, _, _, _, info_buy = self.env.step(action_buy)
 
         # Observation uses price at *current* step (internal 6, original 15 = 120.0) for normalization
-        price_for_obs = self.env.original_close_prices[self.env._map_to_original_index(self.env.current_step)]
-        balance_after_buy = self.env.balance # 5000.0
-        position_after_buy = self.env.position # 41.9747
+        price_for_obs = self.env.original_close_prices[
+            self.env._map_to_original_index(self.env.current_step)
+        ]
+        balance_after_buy = self.env.balance  # 5000.0
+        position_after_buy = self.env.position  # 41.9747
 
-        portfolio_value_for_obs = balance_after_buy + position_after_buy * price_for_obs # 5000 + 41.9747 * 120 = 10036.97
-        expected_norm_pos = (position_after_buy * price_for_obs) / portfolio_value_for_obs if portfolio_value_for_obs > 1e-9 else 0 # (41.9747*120)/10036.97 = 0.5018
-        expected_norm_bal = balance_after_buy / self.initial_balance # 5000 / 10000 = 0.5
+        portfolio_value_for_obs = (
+            balance_after_buy + position_after_buy * price_for_obs
+        )  # 5000 + 41.9747 * 120 = 10036.97
+        expected_norm_pos = (
+            (position_after_buy * price_for_obs) / portfolio_value_for_obs
+            if portfolio_value_for_obs > 1e-9
+            else 0
+        )  # (41.9747*120)/10036.97 = 0.5018
+        expected_norm_bal = (
+            balance_after_buy / self.initial_balance
+        )  # 5000 / 10000 = 0.5
 
-        self.assertAlmostEqual(obs_buy['account_state'][0], expected_norm_pos, places=5)
-        self.assertAlmostEqual(obs_buy['account_state'][1], expected_norm_bal, places=5)
+        self.assertAlmostEqual(obs_buy["account_state"][0], expected_norm_pos, places=5)
+        self.assertAlmostEqual(obs_buy["account_state"][1], expected_norm_bal, places=5)
 
-    def test_step_hold(self): # Example of another converted test
+    def test_step_hold(self):  # Example of another converted test
         """Test holding a position without trading."""
         obs, info = self.env.reset()
         # Step 1: Buy 50%
         action_buy = 2
         _, _, _, _, info_buy = self.env.step(action_buy)
-        position_after_buy = self.env.position 
-        balance_after_buy = self.env.balance   
-        cost_after_buy = info_buy['transaction_cost'] 
+        position_after_buy = self.env.position
+        balance_after_buy = self.env.balance
+        cost_after_buy = info_buy["transaction_cost"]
         cost_basis_after_buy = self.env.position_price
 
-        # Step 2: Hold 
+        # Step 2: Hold
         action_hold = 0
         _, _, _, _, info_hold = self.env.step(action_hold)
-        total_cumulative_cost = info_hold['transaction_cost']
+        total_cumulative_cost = info_hold["transaction_cost"]
 
         # Assert that the TOTAL cumulative cost hasn't changed from after the buy step
         self.assertAlmostEqual(total_cumulative_cost, cost_after_buy, places=5)
@@ -461,6 +580,7 @@ class TestEnvInternals(TestTradingEnvCoreFunctionality): # Inherit from CoreFunc
         # Check cost basis remains unchanged during hold
         self.assertAlmostEqual(self.env.position_price, cost_basis_after_buy, places=5)
 
+
 # Example usage (can be removed or kept for manual testing)
 # if __name__ == "__main__":
-#     unittest.main() 
+#     unittest.main()

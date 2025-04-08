@@ -1,7 +1,6 @@
 import pytest
-import pandas as pd
-from pathlib import Path
-import logging
+
+# import tempfile <-- Remove
 
 # Remove sys.path manipulation
 # src_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src'))
@@ -12,9 +11,10 @@ import logging
 try:
     from src.data import DataManager
 except ImportError as e:
-    print(f"Failed to import DataManager from src.data: {e}")
-    print(f"Current sys.path: {sys.path}")
-    pytest.skip(f"Skipping data tests due to import error: {e}", allow_module_level=True)
+    pytest.skip(
+        f"Skipping data tests due to import error: {e}", allow_module_level=True
+    )
+
 
 # --- Fixture to create dummy data structure ---
 @pytest.fixture
@@ -40,10 +40,12 @@ def dummy_data_structure(tmp_path):
     (train_dir / "train2.csv").write_text(csv_content)
     (val_dir / "val1.csv").write_text(csv_content)
     (test_dir / "test1.csv").write_text(csv_content)
-    
-    return base_dir # Return the path to the base directory
+
+    return base_dir  # Return the path to the base directory
+
 
 # --- Test Cases ---
+
 
 def test_data_manager_init_success(dummy_data_structure):
     """Test successful initialization when data directories exist."""
@@ -61,21 +63,25 @@ def test_data_manager_init_success(dummy_data_structure):
         # print(f"[Test Init Success] Exception during init: {e}")
         pytest.fail(f"DataManager initialization failed unexpectedly: {e}")
 
+
 def test_data_manager_init_missing_processed(tmp_path, caplog):
     """Test initialization raises FileNotFoundError if the processed directory is missing."""
     base_dir = tmp_path
     # Don't create data/processed
     # (base_dir / "data").mkdir() # Don't even create base/data
     # print(f"[Test Missing Processed] Using base_dir: {base_dir}")
-    
+
     # Check that FileNotFoundError is raised
-    with pytest.raises(FileNotFoundError, match="Processed data directory .* not found"):
-         _ = DataManager(base_dir=str(base_dir)) # Initialize with the temp base path
+    with pytest.raises(
+        FileNotFoundError, match="Processed data directory .* not found"
+    ):
+        _ = DataManager(base_dir=str(base_dir))  # Initialize with the temp base path
 
     # Remove caplog check as we expect an exception now
     # caplog.set_level(logging.ERROR)
     # _ = DataManager(base_dir=str(base_dir)) # Initialize with the temp base path
     # assert "Processed data directory 'processed' not found" in caplog.text
+
 
 def test_data_manager_organize_data_success(dummy_data_structure):
     """Test that organize_data correctly finds the files."""
@@ -85,9 +91,9 @@ def test_data_manager_organize_data_success(dummy_data_structure):
         manager.organize_data()
         assert len(manager.train_files) == 2
         assert len(manager.val_files) == 1
-        assert len(manager.test_files) == 1 # Test dir was not empty
+        assert len(manager.test_files) == 1  # Test dir was not empty
         assert manager._data_organized is True
-        assert manager.get_training_files()[0].name == "train1.csv" # Check sorting
+        assert manager.get_training_files()[0].name == "train1.csv"  # Check sorting
         assert manager.get_training_files()[1].name == "train2.csv"
         assert manager.get_validation_files()[0].name == "val1.csv"
         assert manager.get_test_files()[0].name == "test1.csv"
@@ -104,6 +110,7 @@ def test_data_manager_organize_data_missing_train_dir(dummy_data_structure):
     train_dir = base_dir / "data" / "processed" / "train"
     if train_dir.exists():
         import shutil
+
         shutil.rmtree(train_dir)
     # print(f"[Test Missing Train Dir] Removed train_dir: {train_dir}")
 
@@ -117,8 +124,8 @@ def test_data_manager_get_random_training_file(dummy_data_structure):
     """Test retrieving a random training file."""
     base_dir = dummy_data_structure
     manager = DataManager(base_dir=str(base_dir))
-    manager.organize_data() # Load the files first
-    
+    manager.organize_data()  # Load the files first
+
     try:
         random_file = manager.get_random_training_file()
         assert random_file.name in ["train1.csv", "train2.csv"]
@@ -126,4 +133,4 @@ def test_data_manager_get_random_training_file(dummy_data_structure):
         # print(f"[Test Random File] Got random file: {random_file.name}")
     except Exception as e:
         # print(f"[Test Random File] Exception getting random file: {e}")
-        pytest.fail(f"get_random_training_file failed unexpectedly: {e}") 
+        pytest.fail(f"get_random_training_file failed unexpectedly: {e}")

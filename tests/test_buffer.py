@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 import sys
-import os
 import torch
 
 # Remove sys.path manipulation
@@ -15,7 +14,9 @@ try:
 except ImportError as e:
     print(f"Failed to import from src.buffer: {e}")
     print(f"sys.path: {sys.path}")
-    pytest.skip(f"Skipping buffer tests due to import error: {e}", allow_module_level=True)
+    pytest.skip(
+        f"Skipping buffer tests due to import error: {e}", allow_module_level=True
+    )
 
 # --- Constants for Dummy Data --- #
 BUFFER_CAPACITY = 100
@@ -27,6 +28,7 @@ WINDOW_SIZE = 5
 N_FEATURES = 3
 ACCOUNT_STATE_DIM = 2
 
+
 # --- Helper to create dummy experience --- #
 def create_dummy_experience(i=0):
     return Experience(
@@ -34,10 +36,13 @@ def create_dummy_experience(i=0):
         account_state=np.random.rand(ACCOUNT_STATE_DIM).astype(np.float32) + i,
         action=np.random.randint(0, 5),
         reward=np.random.rand() * 10 - 5,
-        next_market_data=np.random.rand(WINDOW_SIZE, N_FEATURES).astype(np.float32) + i + 1,
+        next_market_data=np.random.rand(WINDOW_SIZE, N_FEATURES).astype(np.float32)
+        + i
+        + 1,
         next_account_state=np.random.rand(ACCOUNT_STATE_DIM).astype(np.float32) + i + 1,
-        done=bool(np.random.rand() > 0.95)
+        done=bool(np.random.rand() > 0.95),
     )
+
 
 # --- Fixture for an initialized buffer --- #
 @pytest.fixture
@@ -45,7 +50,9 @@ def per_buffer():
     """Provides an initialized PrioritizedReplayBuffer instance."""
     return PrioritizedReplayBuffer(BUFFER_CAPACITY, ALPHA, BETA_START, BETA_FRAMES)
 
+
 # --- Test Cases --- #
+
 
 def test_buffer_init(per_buffer):
     """Test buffer initialization."""
@@ -56,14 +63,16 @@ def test_buffer_init(per_buffer):
     assert per_buffer.max_priority == 1.0
     assert len(per_buffer) == 0
 
+
 def test_buffer_store_single(per_buffer):
     """Test storing a single experience."""
     exp = create_dummy_experience()
     per_buffer.store(*exp)
     assert len(per_buffer) == 1
     assert len(per_buffer.buffer) == 1
-    assert per_buffer.tree.total() > 0 # Priority should be added
-    assert per_buffer.buffer[0] == exp # Check if deque stores correctly
+    assert per_buffer.tree.total() > 0  # Priority should be added
+    assert per_buffer.buffer[0] == exp  # Check if deque stores correctly
+
 
 def test_buffer_store_multiple(per_buffer):
     """Test storing multiple experiences."""
@@ -73,17 +82,18 @@ def test_buffer_store_multiple(per_buffer):
     for i in range(num_items):
         exp = create_dummy_experience(i)
         if i == 0:
-            first_exp = exp # Store the actual first experience
+            first_exp = exp  # Store the actual first experience
         if i == num_items - 1:
-            last_exp = exp # Store the actual last experience
+            last_exp = exp  # Store the actual last experience
         per_buffer.store(*exp)
-        
+
     assert len(per_buffer) == num_items
     assert len(per_buffer.buffer) == num_items
     # Check if the first item stored is still there
-    assert per_buffer.buffer[0] == first_exp 
+    assert per_buffer.buffer[0] == first_exp
     # Check if the last item stored is correct
     assert per_buffer.buffer[-1] == last_exp
+
 
 def test_buffer_store_exceed_capacity(per_buffer):
     """Test storing more experiences than capacity."""
@@ -99,12 +109,14 @@ def test_buffer_store_exceed_capacity(per_buffer):
     # This check is tricky because deque overwrites, let's check buffer_write_idx
     assert per_buffer.buffer_write_idx == 20
 
+
 def test_buffer_sample_empty(per_buffer):
     """Test sampling from an empty buffer."""
     batch, indices, weights = per_buffer.sample(BATCH_SIZE)
     assert batch is None
     assert indices is None
     assert weights is None
+
 
 def test_buffer_sample_insufficient(per_buffer):
     """Test sampling when buffer has fewer items than batch size."""
@@ -116,22 +128,25 @@ def test_buffer_sample_insufficient(per_buffer):
     assert indices is None
     assert weights is None
 
+
 def test_buffer_sample_sufficient(per_buffer):
     """Test sampling when buffer has enough items."""
     for i in range(BUFFER_CAPACITY):
         per_buffer.store(*create_dummy_experience(i))
     assert len(per_buffer) == BUFFER_CAPACITY
-    
+
     batch, tree_indices, weights = per_buffer.sample(BATCH_SIZE)
-    
+
     assert batch is not None
     assert tree_indices is not None
     assert weights is not None
-    
+
     # Check batch structure and types
     assert isinstance(batch, tuple)
-    assert len(batch) == 7 # Number of fields in Experience
-    market_data, account_state, actions, rewards, next_market, next_account, dones = batch
+    assert len(batch) == 7  # Number of fields in Experience
+    market_data, account_state, actions, rewards, next_market, next_account, dones = (
+        batch
+    )
     assert isinstance(market_data, np.ndarray)
     assert isinstance(account_state, np.ndarray)
     assert isinstance(actions, np.ndarray)
@@ -156,28 +171,29 @@ def test_buffer_sample_sufficient(per_buffer):
     assert weights.shape == (BATCH_SIZE,)
     assert np.all(weights > 0) and np.all(weights <= 1.0 + 1e-6)
 
+
 def test_buffer_update_priorities(per_buffer):
     """Test updating priorities after sampling."""
     for i in range(BUFFER_CAPACITY):
         per_buffer.store(*create_dummy_experience(i))
-    
+
     # Sample a batch
     batch, tree_indices, weights = per_buffer.sample(BATCH_SIZE)
     assert tree_indices is not None
 
     # Get initial priorities for the sampled items
     initial_priorities = [per_buffer.tree.tree[idx] for idx in tree_indices]
-    
+
     # Create dummy TD errors (priorities) - use tensor as expected by method
     new_td_errors = torch.abs(torch.randn(BATCH_SIZE))
     new_priorities_np = (new_td_errors.numpy() + per_buffer.epsilon) ** per_buffer.alpha
-    
+
     # Update priorities
     per_buffer.update_priorities(tree_indices, new_td_errors)
-    
+
     # Check if priorities in the tree were updated
     updated_priorities = [per_buffer.tree.tree[idx] for idx in tree_indices]
-    
+
     assert len(initial_priorities) == BATCH_SIZE
     assert len(updated_priorities) == BATCH_SIZE
     # Assert that the priorities have changed and roughly match the expected new values
@@ -185,18 +201,19 @@ def test_buffer_update_priorities(per_buffer):
     # Assert that max priority was potentially updated
     assert per_buffer.max_priority >= np.max(new_priorities_np)
 
+
 def test_buffer_update_beta(per_buffer):
     """Test beta annealing."""
     assert per_buffer.beta == BETA_START
     per_buffer.update_beta(total_steps=0)
     assert per_buffer.beta == BETA_START
-    
-    per_buffer.update_beta(total_steps = BETA_FRAMES / 2)
+
+    per_buffer.update_beta(total_steps=BETA_FRAMES / 2)
     expected_beta_mid = BETA_START + 0.5 * (1.0 - BETA_START)
     assert abs(per_buffer.beta - expected_beta_mid) < 1e-6
-    
-    per_buffer.update_beta(total_steps = BETA_FRAMES)
+
+    per_buffer.update_beta(total_steps=BETA_FRAMES)
     assert abs(per_buffer.beta - 1.0) < 1e-6
-    
-    per_buffer.update_beta(total_steps = BETA_FRAMES * 2)
-    assert abs(per_buffer.beta - 1.0) < 1e-6 # Should clamp at 1.0 
+
+    per_buffer.update_beta(total_steps=BETA_FRAMES * 2)
+    assert abs(per_buffer.beta - 1.0) < 1e-6  # Should clamp at 1.0
