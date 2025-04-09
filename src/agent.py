@@ -5,16 +5,14 @@ import numpy as np
 import time
 import random
 from collections import deque
-from buffer import PrioritizedReplayBuffer  # Updated import
-from model import RainbowNetwork  # Updated import
+from .buffer import PrioritizedReplayBuffer
+from .model import RainbowNetwork
 import os  # Added for save/load path handling
+from .utils.utils import set_seeds
+import yaml  # Added for config load/save
+from .constants import ACCOUNT_STATE_DIM # Import constant
 
 logger = logging.getLogger("Agent")
-
-# Constants
-ACCOUNT_STATE_DIM = 2  # Dimension of the account state vector
-DEFAULT_GRAD_CLIP_NORM = 10.0
-
 
 # --- Start: Rainbow DQN Agent ---
 class RainbowDQNAgent:
@@ -37,11 +35,12 @@ class RainbowDQNAgent:
                            Expected keys: seed, gamma, lr, replay_buffer_size, batch_size,
                            target_update_freq, num_atoms, v_min, v_max, alpha, beta_start,
                            beta_frames, n_steps, window_size, n_features, hidden_dim,
-                           num_actions, debug (optional), grad_clip_norm (optional).
+                           num_actions, grad_clip_norm, debug (optional).
             device (str): The device to run the agent on ('cuda' or 'cpu').
         """
         self.config = config
         self.device = device
+        # Use direct access for mandatory parameters
         self.seed = config["seed"]
         self.gamma = config["gamma"]
         self.lr = config["lr"]
@@ -55,8 +54,13 @@ class RainbowDQNAgent:
         self.window_size = config["window_size"]
         self.n_features = config["n_features"]
         self.hidden_dim = config["hidden_dim"]
-        self.debug_mode = config.get("debug", False)  # Optional debug flag
-        self.grad_clip_norm = config.get("grad_clip_norm", DEFAULT_GRAD_CLIP_NORM)
+        self.replay_buffer_size = config["replay_buffer_size"]
+        self.alpha = config["alpha"]
+        self.beta_start = config["beta_start"]
+        self.beta_frames = config["beta_frames"]
+        self.grad_clip_norm = config["grad_clip_norm"]
+        # Optional flags can still use .get()
+        self.debug_mode = config.get("debug", False)
 
         # Setup seeds
         np.random.seed(self.seed)
@@ -100,10 +104,10 @@ class RainbowDQNAgent:
 
         # Replay buffer
         self.buffer = PrioritizedReplayBuffer(
-            self.config["replay_buffer_size"],
-            self.config["alpha"],
-            self.config["beta_start"],
-            self.config["beta_frames"],
+            self.replay_buffer_size,
+            self.alpha,
+            self.beta_start,
+            self.beta_frames,
         )
         # For N-step returns
         self.n_step_buffer = deque(maxlen=self.n_steps)

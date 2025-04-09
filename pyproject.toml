@@ -25,4 +25,11 @@ ignore = ["E501"] # Ignore line length errors globally
 [tool.ruff.lint.per-file-ignores]
 "tests/**.py" = [
     "F841", # Ignore unused local variables in test files
+    "E501", # Optionally ignore line length in tests if necessary
 ]
+"src/agent.py" = ["F841"] # Ignore unused grad check vars in agent
+"src/env/__init__.py" = ["F401"] # Ignore unused imports in __init__
+
+# You can also configure other tools like black here if desired
+[tool.black]
+line-length = 88

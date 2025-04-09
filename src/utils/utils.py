@@ -5,7 +5,7 @@ import numpy as np
 import torch
 import logging.handlers  # Import handlers
 import sys  # Import sys for console output
-from data import DataManager  # Correct import
+from ..data import DataManager  # Use ..data as utils is one level down
 
 logger = logging.getLogger("Utils")  # Use a specific logger or the root logger
 

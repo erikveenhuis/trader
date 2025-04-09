@@ -5,27 +5,20 @@ import torch.nn.functional as F
 import os
 import sys
 
-# Re-adding sys.path manipulation for this file
-src_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../src")
-)  # Path adjusted from tests/ to src/
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
+# Remove sys.path manipulation
+# src_path = os.path.abspath(
+#     os.path.join(os.path.dirname(__file__), "../src")
+# )  # Path adjusted from tests/ to src/
+# if src_path not in sys.path:
+#     sys.path.insert(0, src_path)
 
-try:
-    # Revert to direct imports
-    from model import NoisyLinear, PositionalEncoding, RainbowNetwork
-except ImportError as e:
-    print(f"Failed to import required modules directly: {e}")
-    print(f"Current sys.path: {sys.path}")
-    pytest.skip(
-        f"Skipping model tests due to import error: {e}", allow_module_level=True
-    )
+# Use absolute imports from src
+from src.model import NoisyLinear, PositionalEncoding, RainbowNetwork
 
 # TODO: Add tests for src/model.py
 # Consider merging/reviewing with tests/test_networks.py
 
-
+@pytest.mark.unittest
 def test_placeholder_model():
     assert True
 
@@ -43,9 +36,11 @@ def default_config():
         "num_atoms": 51,
         "v_min": -10,
         "v_max": 10,
-        "transformer_nhead": 2,
-        "transformer_layers": 1,
+        "nhead": 2,
+        "num_encoder_layers": 1,
+        "dim_feedforward": 128,
         "dropout": 0.1,
+        "transformer_dropout": 0.1,
         # Add other keys if RainbowNetwork expects them, even if not directly used
         "gamma": 0.99,
         "lr": 1e-4,
@@ -67,7 +62,7 @@ def device():
 
 # --- Test NoisyLinear --- #
 
-
+@pytest.mark.unittest
 def test_noisy_linear_init():
     layer = NoisyLinear(in_features=10, out_features=5)
     assert layer.in_features == 10
@@ -80,6 +75,7 @@ def test_noisy_linear_init():
     assert hasattr(layer, "bias_epsilon")
 
 
+@pytest.mark.unittest
 def test_noisy_linear_forward_train(device):
     batch_size = 4
     in_features = 10
@@ -117,6 +113,7 @@ def test_noisy_linear_forward_train(device):
     assert torch.equal(layer.bias_epsilon, bias_epsilon_before)
 
 
+@pytest.mark.unittest
 def test_noisy_linear_forward_eval(device):
     batch_size = 4
     in_features = 10
@@ -136,6 +133,7 @@ def test_noisy_linear_forward_eval(device):
     assert torch.allclose(output, mu_output)
 
 
+@pytest.mark.unittest
 def test_noisy_linear_reset_noise(device):
     layer = NoisyLinear(in_features=10, out_features=5).to(device)
     layer.train()
@@ -158,7 +156,7 @@ def test_noisy_linear_reset_noise(device):
 
 # --- Test PositionalEncoding --- #
 
-
+@pytest.mark.unittest
 def test_positional_encoding_init():
     d_model = 64
     max_len = 50
@@ -167,6 +165,7 @@ def test_positional_encoding_init():
     assert pe.pe.shape == (max_len, 1, d_model)
 
 
+@pytest.mark.unittest
 def test_positional_encoding_forward(device):
     batch_size = 4
     seq_len = 20
@@ -194,7 +193,6 @@ def test_positional_encoding_forward(device):
 
 # --- Test RainbowNetwork --- #
 
-
 @pytest.fixture(scope="module")
 def network(default_config, device):
     """Creates a RainbowNetwork instance for testing."""
@@ -206,6 +204,7 @@ def network(default_config, device):
     return net
 
 
+@pytest.mark.unittest
 def test_rainbow_network_init(network, default_config, device):
     assert network is not None
     assert network.device == device
@@ -235,6 +234,7 @@ def test_rainbow_network_init(network, default_config, device):
         assert str(param.device).startswith(str(device))
 
 
+@pytest.mark.unittest
 def test_rainbow_network_forward_pass(network, default_config, device):
     batch_size = default_config["batch_size"]
     window_size = default_config["window_size"]
@@ -261,6 +261,7 @@ def test_rainbow_network_forward_pass(network, default_config, device):
     assert torch.allclose(prob_sums, torch.ones_like(prob_sums), atol=1e-6)
 
 
+@pytest.mark.unittest
 def test_rainbow_network_get_q_values(network, default_config, device):
     batch_size = default_config["batch_size"]
     window_size = default_config["window_size"]
@@ -281,6 +282,7 @@ def test_rainbow_network_get_q_values(network, default_config, device):
     assert not torch.isinf(q_values).any()
 
 
+@pytest.mark.unittest
 def test_rainbow_network_reset_noise(network, device):
     # Ensure network has NoisyLinear layers
     has_noisy = any(isinstance(m, NoisyLinear) for m in network.modules())
@@ -308,6 +310,7 @@ def test_rainbow_network_reset_noise(network, device):
     network.eval()  # Set back to eval mode
 
 
+@pytest.mark.unittest
 def test_rainbow_network_train_eval_modes(network, default_config, device):
     batch_size = default_config["batch_size"]
     window_size = default_config["window_size"]

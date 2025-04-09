@@ -9,14 +9,14 @@ import numpy as np
 import yaml  # Added for config loading
 import argparse  # Added for command-line arguments
 
-# Moved imports to top
-from env.trading_env import TradingEnv
-from trainer import RainbowTrainerModule
-from agent import RainbowDQNAgent
-from utils.utils import setup_global_logging, set_seeds, get_random_data_file
-from data import DataManager
-from utils.checkpoint_utils import find_latest_checkpoint, load_checkpoint
-from evaluation import evaluate_on_test_data
+# Moved imports to top - USE SRC PREFIX
+from src.env.trading_env import TradingEnv
+from src.trainer import RainbowTrainerModule
+from src.agent import RainbowDQNAgent
+from src.utils.utils import setup_global_logging, set_seeds, get_random_data_file
+from src.data import DataManager
+from src.utils.checkpoint_utils import find_latest_checkpoint, load_checkpoint
+from src.evaluation import evaluate_on_test_data
 
 print("Starting Rainbow DQN training script...")
 print(f"CUDA available: {torch.cuda.is_available()}")
@@ -41,17 +41,19 @@ logger = logging.getLogger("Main")
 
 def run_training(config: dict, data_manager: DataManager):
     """Runs the training loop for the Rainbow DQN agent."""
-    # Extract relevant config sections
-    agent_config = config["agent"]
-    env_config = config["environment"]
-    trainer_config = config["trainer"]
-    run_config = config.get("run", {})  # Optional run section for mode, etc.
-    model_dir = run_config.get("model_dir", "models")
-    resume_training = run_config.get("resume", False)
-    num_episodes = run_config.get("episodes", 1000)  # Default if not in run config
-    specific_file = run_config.get("specific_file", None)
+    # Extract relevant config sections directly (will raise KeyError if missing)
+    agent_config = config['agent']
+    env_config = config['environment']
+    trainer_config = config['trainer']
+    run_config = config['run'] 
+    
+    # Get run parameters, using .get() only for genuinely optional/defaultable values
+    model_dir = run_config.get('model_dir', 'models') # Allow default
+    resume_training = run_config.get('resume', False) # Allow default
+    num_episodes = run_config.get('episodes', 1000) # Allow default
+    specific_file = run_config.get('specific_file', None) # Allow default (None)
 
-    set_seeds(trainer_config["seed"])
+    set_seeds(trainer_config['seed'])
     logger.info(f"Running training with config: {config}")
 
     # Determine device
@@ -249,24 +251,23 @@ def main():  # Remove default config_path
         logger.error(f"An unexpected error occurred loading config: {e}. Exiting.")
         return
 
-    # --- Extract run parameters ---
-    run_config = config.get("run", {})
-    mode = run_config.get("mode", "train")  # Default to train if not specified
-    model_dir = run_config.get("model_dir", "models")
-    eval_model_prefix = run_config.get(
-        "eval_model_prefix", f"{model_dir}/rainbow_transformer_best"
-    )
-    skip_evaluation = run_config.get(
-        "skip_evaluation", False
-    )  # Added check for skip flag
-    data_base_dir = run_config.get(
-        "data_base_dir", "data"
-    )  # Get base dir from config, default to 'data'
-    agent_config = config["agent"]
-
+    # --- Extract sections and parameters ---
+    # Expect these sections to exist 
+    agent_config = config['agent']
+    trainer_config = config['trainer']
+    env_config = config['environment']
+    run_config = config['run'] # Expect 'run' section
+    
+    # Get run parameters, allowing defaults only where sensible
+    mode = run_config.get('mode', 'train') # Default to train is reasonable
+    model_dir = run_config.get('model_dir', 'models') # Default model dir is reasonable
+    eval_model_prefix = run_config.get('eval_model_prefix', f'{model_dir}/rainbow_transformer_best') # Default prefix is reasonable
+    skip_evaluation = run_config.get('skip_evaluation', False) # Default to False is reasonable
+    data_base_dir = run_config.get('data_base_dir', 'data') # Default base dir is reasonable
+    
     # --- Initialize DataManager ---
     # Pass base_dir from config. Processed dir name defaults to 'processed' unless specified.
-    data_manager = DataManager(base_dir=data_base_dir)
+    data_manager = DataManager(base_dir=data_base_dir) 
     assert isinstance(data_manager, DataManager), "Failed to initialize DataManager"
 
     os.makedirs(model_dir, exist_ok=True)

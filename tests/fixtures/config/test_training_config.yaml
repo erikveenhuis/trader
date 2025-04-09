@@ -14,6 +14,11 @@ agent:
   n_features: 5
   hidden_dim: 32           # Smaller network
   num_actions: 7
+  # Transformer specific params (add if missing)
+  nhead: 4 # Number of attention heads (ensure divisible by hidden_dim)
+  num_encoder_layers: 1 # Minimal layers for testing
+  dim_feedforward: 64 # Smaller feedforward dim for testing
+  transformer_dropout: 0.0 # No dropout for simple test
 
   # Rainbow specific params
   n_steps: 3
@@ -31,6 +36,8 @@ agent:
 environment:
   initial_balance: 10000.0
   transaction_fee: 0.001
+  reward_pnl_scale: 500.0 # Scale factor for PnL component of reward (if used)
+  reward_cost_scale: 200.0 # Scale factor for transaction cost penalty in reward
 
 trainer:
   seed: 42

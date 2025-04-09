@@ -204,6 +204,17 @@ class PerformanceTracker:
             ), "Return calculation resulted in NaN/Inf"
             self.returns.append(ret)
 
+    def get_action_counts(self) -> Dict[int, int]:
+        """Counts the occurrences of each discrete action taken."""
+        counts = {i: 0 for i in range(7)} # Assuming 7 discrete actions (0-6)
+        for action in self.actions:
+            action_int = int(action) # Ensure action is integer index
+            if 0 <= action_int < 7:
+                counts[action_int] += 1
+            else:
+                logger.warning(f"Encountered invalid action index {action} in tracker.")
+        return counts
+
     def get_metrics(self) -> Dict[str, float]:
         """Calculate all metrics from current data."""
         if not self.portfolio_values:
@@ -224,18 +235,21 @@ class PerformanceTracker:
             "max_drawdown": calculate_max_drawdown(self.portfolio_values),
             "win_rate": calculate_win_rate(self.returns),
             "avg_trade_return": calculate_avg_trade_return(self.returns),
-            "transaction_costs": sum(self.transaction_costs),
+            "transaction_costs": sum(self.transaction_costs) if self.transaction_costs else 0.0,
             "avg_reward": np.mean(self.rewards) if self.rewards else 0.0,
-            "avg_action": np.mean(self.actions) if self.actions else 0.0,
+            "action_counts": self.get_action_counts(),
         }
         assert all(
-            isinstance(v, (float, np.float32, np.float64)) for v in metrics.values()
-        ), "Not all calculated metrics are floats"
+            isinstance(v, (float, np.float32, np.float64, dict)) for v in metrics.values()
+        ), "Not all calculated metrics are floats or dict"
         assert 0.0 <= metrics["max_drawdown"] <= 1.0, "Max drawdown out of range [0, 1]"
         assert 0.0 <= metrics["win_rate"] <= 1.0, "Win rate out of range [0, 1]"
+        # Check for NaN/Inf only in numeric values
         assert not any(
-            np.isnan(v) or np.isinf(v) for v in metrics.values()
-        ), "NaN or Inf found in calculated metrics"
+            np.isnan(v) or np.isinf(v) 
+            for k, v in metrics.items() 
+            if isinstance(v, (float, np.number)) # Check only numeric types
+        ), "NaN or Inf found in calculated numeric metrics"
         return metrics
 
     def get_recent_metrics(self) -> Dict[str, float]:
@@ -270,9 +284,8 @@ class PerformanceTracker:
             "max_drawdown": calculate_max_drawdown(recent_portfolio),
             "win_rate": calculate_win_rate(recent_returns),
             "avg_trade_return": calculate_avg_trade_return(recent_returns),
-            "transaction_costs": sum(recent_costs),
+            "transaction_costs": sum(recent_costs) if recent_costs else 0.0,
             "avg_reward": np.mean(recent_rewards),
-            "avg_action": np.mean(recent_actions),
         }
         assert all(
             isinstance(v, (float, np.float32, np.float64)) for v in metrics.values()

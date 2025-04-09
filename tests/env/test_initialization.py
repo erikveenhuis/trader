@@ -39,6 +39,7 @@ def dummy_csv_path():
     pass  # Add pass
 
 
+@pytest.mark.unittest
 class TestTradingEnvInitializationErrors:
     """Tests for errors during TradingEnv initialization."""
 

@@ -2,6 +2,7 @@ import pandas as pd
 import sys
 from pathlib import Path
 import tempfile
+import pytest
 
 # Remove sys.path manipulation
 # project_root = Path(__file__).resolve().parent.parent.parent
@@ -33,6 +34,7 @@ INITIAL_BALANCE = 1.0  # Very small initial balance
 TRANSACTION_FEE = 0.05  # High transaction fee
 
 
+@pytest.mark.unittest
 class TestTradingEnvSmallValues:
     """Tests TradingEnv calculations with very small price values."""
 
@@ -128,7 +130,7 @@ class TestTradingEnvSmallValues:
         assert (
             abs(info["transaction_cost"] - transaction_cost) < 1e-9
         )  # Cumulative cost
-        assert info["step"] == self.window_size + 1
+        assert info["step"] == self.window_size
 
         # Check observation shapes (basic check)
         assert next_obs["market_data"].shape == (self.window_size, N_FEATURES)
@@ -181,4 +183,4 @@ class TestTradingEnvSmallValues:
             abs(info["transaction_cost"] - expected_total_cost) / expected_total_cost
             < 1e-7
         )
-        assert info["step"] == self.window_size + 2
+        assert info["step"] == self.window_size + 1

@@ -4,12 +4,15 @@ from pathlib import Path
 from datetime import datetime
 import json
 from typing import List, Dict, Any
+import os
 
-# Import necessary components from other modules
-from agent import RainbowDQNAgent
-from trainer import RainbowTrainerModule
-from env import TradingEnv
-from utils.utils import set_seeds
+# Import necessary components from other modules using relative imports
+from .agent import RainbowDQNAgent
+from .trainer import RainbowTrainerModule
+from .env import TradingEnv
+from .data import DataManager
+from .utils.utils import set_seeds
+from .metrics import PerformanceTracker, calculate_composite_score
 
 logger = logging.getLogger("Evaluation")
 
@@ -146,8 +149,8 @@ def evaluate_on_test_data(
         logger.info(f"Average Final Portfolio: ${metrics_summary['avg_portfolio']:.2f}")
         logger.info(f"Average Return: {metrics_summary['avg_return']:.2f}%")
         logger.info(f"Average Sharpe Ratio: {metrics_summary['avg_sharpe']:.4f}")
-        logger.info(f"Average Max Drawdown: {metrics_summary['avg_drawdown']:.4f}")
-        logger.info(f"Average Win Rate: {metrics_summary['avg_win_rate']:.4f}")
+        logger.info(f"Average Max Drawdown: {metrics_summary['avg_drawdown']*100:.2f}%")
+        logger.info(f"Average Win Rate: {metrics_summary['avg_win_rate']*100:.2f}%")
         logger.info(
             f"Average Transaction Costs: ${metrics_summary['avg_transaction_costs']:.2f}"
         )
@@ -194,8 +197,9 @@ def evaluate_on_test_data(
             logger.info(f"    Portfolio: ${r['portfolio_value']:.2f}")
             logger.info(f"    Return: {r['total_return']:.2f}%")
             logger.info(f"    Sharpe: {r.get('sharpe_ratio', 'N/A'):.4f}")
-            logger.info(f"    Max Drawdown: {r.get('max_drawdown', 'N/A'):.4f}")
-            logger.info(f"    Win Rate: {r.get('win_rate', 'N/A'):.4f}")
+            logger.info(f"    Max Drawdown: {r.get('max_drawdown', 'N/A')*100:.2f}%")
+            logger.info(f"    Win Rate: {r.get('win_rate', 'N/A')*100:.2f}%")
+            logger.info(f"    Action Counts: {r.get('action_counts', 'N/A')}")
             logger.info(
                 f"    Transaction Costs: ${r.get('transaction_costs', 'N/A'):.2f}"
             )

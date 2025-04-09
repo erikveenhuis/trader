@@ -28,11 +28,11 @@ class TradingEnv(gym.Env):
     def __init__(
         self,
         data_path: str,
-        window_size: int = 60,
-        initial_balance: float = 10000.0,
-        transaction_fee: float = 0.001,
-        reward_pnl_scale: float = 1000.0,
-        reward_cost_scale: float = 1000.0,
+        reward_pnl_scale: float,
+        reward_cost_scale: float,
+        initial_balance: float,
+        transaction_fee: float,
+        window_size: int,
     ):
         super(TradingEnv, self).__init__()
 
@@ -40,6 +40,7 @@ class TradingEnv(gym.Env):
             f"Initializing TradingEnv with window_size={window_size}, initial_balance={initial_balance}, transaction_fee={transaction_fee}"
         )
 
+        self.data_path = data_path
         self.window_size = window_size
         self.initial_balance = initial_balance
         self.transaction_fee = transaction_fee
@@ -125,10 +126,9 @@ class TradingEnv(gym.Env):
         self.balance = self.initial_balance
         self.position = 0
         self.position_price = 0
-        self.portfolio_values = []
         self.total_transaction_cost = 0.0
-
-        logger.debug("TradingEnv.__init__ completed.")
+        self.portfolio_values = []
+        self.previous_price = 0.0
 
     def _normalize_data(self, data_df):
         """Normalize the OHLCV data using min-max scaling. Returns normalized DataFrame."""
@@ -162,23 +162,6 @@ class TradingEnv(gym.Env):
             )
         return internal_index + (self.window_size - 1)
 
-    def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
-        logger.info("Resetting environment")
-        self.current_step = self.window_size
-        self.balance = self.initial_balance
-        self.position = 0
-        self.position_price = 0
-        self.total_transaction_cost = 0.0
-        self.portfolio_values = []
-        observation = self._get_observation()
-        info = self._get_info()
-        self.portfolio_values.append(info["portfolio_value"])
-        logger.info(
-            f"Environment reset. Initial portfolio value: ${info['portfolio_value']:.2f}"
-        )
-        return observation, info
-
     def _get_observation(self):
         """Get the current observation."""
         observation_step = min(self.current_step, self.data_len - 1)
@@ -207,6 +190,9 @@ class TradingEnv(gym.Env):
         ), f"Negative price ({current_price}) in _get_observation."
 
         portfolio_value = max(0, self.balance + self.position * current_price)
+        # --- DEBUG: Observation State Calc ---
+        # print(f"[DEBUG ObsState] balance={self.balance:.8f}, position={self.position:.8f}, current_price={current_price:.8f} -> portfolio_value={portfolio_value:.8f}")
+        # --- END DEBUG ---
         assert (
             portfolio_value >= -1e-9
         ), f"Negative portfolio_value ({portfolio_value}) in _get_observation."
@@ -219,6 +205,9 @@ class TradingEnv(gym.Env):
         normalized_balance = (
             self.balance / self.initial_balance if self.initial_balance > 1e-9 else 0
         )
+        # --- DEBUG: Observation State Calc ---
+        # print(f"[DEBUG ObsState] norm_pos={normalized_position:.8f}, norm_bal={normalized_balance:.8f}")
+        # --- END DEBUG ---
         account_state = np.array(
             [normalized_position, normalized_balance], dtype=np.float32
         )
@@ -282,7 +271,7 @@ class TradingEnv(gym.Env):
         previous_portfolio_value = (
             self.portfolio_values[-1] if self.portfolio_values else self.initial_balance
         )
-        invalid_action_penalty = 0.0  # Initialize penalty
+        invalid_action_penalty = -1.0  # Initialize penalty to a negative value
 
         try:
             original_index_current = min(
@@ -294,17 +283,26 @@ class TradingEnv(gym.Env):
             logger.error(
                 f"Error accessing price data at step {self.current_step}: {str(e)}"
             )
-            current_price = self.position_price if self.position_price > 0 else 1.0
+            current_price = self.position_price if self.position_price > 0 else self.previous_price
         assert (
             current_price > 1e-20
         ), f"current_price is non-positive ({current_price}) at step {self.current_step}."
 
+        # Calculate current portfolio value BEFORE action logic
+        current_portfolio_value = self.balance + self.position * current_price
+
         position_change = 0.0
         cash_change = 0.0
         step_transaction_cost = 0.0
+        reward = 0.0
 
         if action == 0:
-            pass
+            if self.position > 1e-9:
+                price_change = current_price - self.previous_price
+                reward = (price_change * self.position / self.initial_balance) * self.reward_pnl_scale
+            else:
+                reward = 0.0
+            step_transaction_cost = 0.0
         elif 1 <= action <= 3:
             buy_fraction = 0.0
             if action == 1:
@@ -315,7 +313,7 @@ class TradingEnv(gym.Env):
                 buy_fraction = 1.00
             if self.balance > 1e-9:
                 buy_amount_cash = self.balance * buy_fraction
-                step_transaction_cost = buy_amount_cash * self.transaction_fee
+                step_transaction_cost = buy_amount_cash * self.transaction_fee # CALCULATION
                 cash_for_crypto = buy_amount_cash - step_transaction_cost
                 if cash_for_crypto > 0 and current_price > 1e-20:
                     position_change = cash_for_crypto / current_price
@@ -331,13 +329,19 @@ class TradingEnv(gym.Env):
                         else:
                             self.position_price = 0
                 else:
+                    # Penalize ineffectual buy attempt (low cash/price)
                     logger.debug(
-                        f"Step {self.current_step}: Low cash/price for Buy {buy_fraction*100}%."
+                        f"Step {self.current_step}: Low cash/price for Buy {buy_fraction*100}%. Penalizing."
                     )
+                    reward = invalid_action_penalty
+                    step_transaction_cost = 0.0 # No cost if no trade
             else:
+                # Penalize buy attempt with zero balance
                 logger.debug(
-                    f"Step {self.current_step}: Zero balance, cannot Buy {buy_fraction*100}%."
+                    f"Step {self.current_step}: Zero balance, cannot Buy {buy_fraction*100}%. Penalizing."
                 )
+                reward = invalid_action_penalty
+                step_transaction_cost = 0.0 # No cost if no trade
         elif 4 <= action <= 6:
             assert (
                 self.position >= -1e-9
@@ -364,12 +368,44 @@ class TradingEnv(gym.Env):
                     cash_change = 0
                     step_transaction_cost = cash_before_fee
             else:
+                # Invalid sell attempt
                 logger.debug(
                     f"Step {self.current_step}: Zero position, cannot Sell {sell_fraction*100}%. Penalizing."
                 )  # Updated log message
-                invalid_action_penalty = -0.1  # Apply penalty
+                reward = invalid_action_penalty # Penalty is the only reward component
+                step_transaction_cost = 0.0 # No cost for invalid action
 
-        self.total_transaction_cost += step_transaction_cost
+        # Apply transaction cost penalty ONLY if a valid trade occurred (step_cost > 0)
+        # and the reward wasn't already set by the invalid penalty
+        if step_transaction_cost > 1e-9 and action != 0 and not (4 <= action <= 6 and self.position <= 1e-9):
+            reward_cost = (
+                -(step_transaction_cost / self.initial_balance) * self.reward_cost_scale
+                if self.initial_balance > 1e-9
+                else 0.0
+            )
+            # For buy/sell, calculate PnL based on portfolio change AFTER cost
+            # This is tricky, let's stick to simpler cost penalty for now and potentially zero base reward for buy/sell
+            # Alternative: reward = cash_change * scale ? Needs careful thought.
+            # For now, let action 0 be the main reward source, cost is penalty.
+            reward = reward_cost
+            # TODO: Revisit reward for Buy/Sell actions. Maybe use portfolio change AFTER cost?
+            reward_pnl = 0.0 # PnL is not added for buy/sell in current logic
+            was_invalid = False
+        elif (4 <= action <= 6 and self.position <= 1e-9) or \
+             (1 <= action <= 3 and (self.balance <= 1e-9 or cash_for_crypto <= 0)):
+             # Handle invalid actions explicitly to store their penalty for logging
+             reward_pnl = 0.0
+             reward_cost = 0.0
+             was_invalid = True
+             # Reward is already set to invalid_action_penalty in the action logic blocks
+        else: # Action 0 or valid trade with zero cost (should not happen often)
+             reward_pnl = reward # Reward for action 0 is PnL
+             reward_cost = 0.0
+             was_invalid = False
+
+        # Accumulate total cost
+        self.total_transaction_cost = self.total_transaction_cost + step_transaction_cost # Explicit addition
+
         new_balance = self.balance + cash_change
         new_position = self.position + position_change
         logger.debug(
@@ -394,23 +430,6 @@ class TradingEnv(gym.Env):
             self.position_price >= 0
         ), f"Position price negative ({self.position_price})"
 
-        current_portfolio_value = self.balance + self.position * current_price
-        portfolio_log_return = (
-            np.log(current_portfolio_value / previous_portfolio_value)
-            if previous_portfolio_value > 1e-9 and current_portfolio_value > 1e-9
-            else 0.0
-        )
-        reward_pnl = portfolio_log_return * self.reward_pnl_scale
-        reward_cost = (
-            -(step_transaction_cost / self.initial_balance) * self.reward_cost_scale
-            if self.initial_balance > 1e-9
-            else 0.0
-        )
-        reward = reward_pnl + reward_cost + invalid_action_penalty
-        assert np.isfinite(reward), f"Reward must be finite, but got: {reward}"
-
-        self.current_step += 1
-
         # --- Termination Conditions --- #
         # 1. Reached end of data
         end_of_data = self.current_step >= self.data_len - 1
@@ -434,7 +453,37 @@ class TradingEnv(gym.Env):
             logger.info(
                 f"Final portfolio value: ${info['portfolio_value']:.2f}, Total Transaction Cost: ${self.total_transaction_cost:.2f}"
             )
+
+        # Update previous price for next step
+        self.previous_price = current_price
+
+        self.current_step += 1
+        # --- Log Reward Breakdown --- # 
+        logger.debug(f"[REWARD DEBUG] Step: {self.current_step-1}, Action: {action}, "
+                     f"StepCost: {step_transaction_cost:.4f}, PnL_Rew: {reward_pnl:.4f}, "
+                     f"Cost_Rew: {reward_cost:.4f}, InvalidPenalty: {invalid_action_penalty if was_invalid else 0.0:.4f}, "
+                     f"Final_Reward: {reward:.4f}")
+        # --- End Reward Breakdown --- #
         return next_obs, reward, done, False, info
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed)
+        logger.info("Resetting environment")
+        self.current_step = self.window_size
+        self.balance = self.initial_balance
+        self.position = 0
+        self.position_price = 0
+        self.total_transaction_cost = 0.0
+        self.portfolio_values = []
+        self.previous_price = self._get_info().get('price', 0.0)
+
+        observation = self._get_observation()
+        info = self._get_info()
+        self.portfolio_values.append(info["portfolio_value"])
+        logger.info(
+            f"Environment reset. Initial portfolio value: ${info['portfolio_value']:.2f}"
+        )
+        return observation, info
 
     def close(self):
         logger.info("Closing trading environment")

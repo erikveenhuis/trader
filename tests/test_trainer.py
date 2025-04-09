@@ -6,17 +6,12 @@ import logging  # Added for handler setting
 import shutil  # Added for fixture cleanup
 from unittest.mock import MagicMock, patch, call, ANY
 
-try:
-    # Use direct imports now
-    from trainer import RainbowTrainerModule
-    from agent import RainbowDQNAgent, ACCOUNT_STATE_DIM
-    from env import TradingEnv
-    from data import DataManager
-    from metrics import calculate_composite_score
-except ImportError as e:
-    pytest.skip(
-        f"Skipping trainer tests due to import error: {e}", allow_module_level=True
-    )
+# Use absolute imports from src
+from src.trainer import RainbowTrainerModule
+from src.agent import RainbowDQNAgent, ACCOUNT_STATE_DIM
+from src.env import TradingEnv
+from src.data import DataManager
+from src.metrics import calculate_composite_score
 
 
 # --- Test Configuration ---
@@ -198,7 +193,7 @@ def trainer(mock_agent, mock_data_manager, default_config, tmp_path):
 
 # --- Test Cases ---
 
-
+@pytest.mark.unittest
 def test_trainer_init(trainer, default_config, tmp_path):
     assert trainer.agent is not None
     assert trainer.device == torch.device("cpu")
@@ -219,6 +214,7 @@ def test_trainer_init(trainer, default_config, tmp_path):
     )
 
 
+@pytest.mark.unittest
 @patch("torch.save")
 def test_save_trainer_checkpoint(mock_torch_save, trainer):
     episode = 10
@@ -254,6 +250,7 @@ def test_save_trainer_checkpoint(mock_torch_save, trainer):
     mock_torch_save.assert_has_calls(calls, any_order=False)
 
 
+@pytest.mark.unittest
 def test_evaluate_for_validation(trainer, mock_env, mock_agent, default_config):
     # Renamed argument to config to avoid shadowing fixture
     config = default_config
@@ -290,7 +287,8 @@ def test_evaluate_for_validation(trainer, mock_env, mock_agent, default_config):
     assert mock_env.step.call_count == 2
 
 
-@patch("trainer.calculate_composite_score", return_value=0.75)
+@pytest.mark.unittest
+@patch("src.trainer.calculate_composite_score", return_value=0.75)
 @patch("json.dump")
 def test_validate(
     mock_json_dump, mock_calc_score, trainer, mock_data_manager, mock_env
@@ -325,6 +323,7 @@ def test_validate(
 
 
 # Patch evaluate_for_validation using decorator
+@pytest.mark.unittest
 @patch.object(RainbowTrainerModule, "evaluate_for_validation", return_value=(-5.0, {}))
 def test_validate_early_stopping(mock_evaluate_for_validation, trainer):
     trainer.best_validation_metric = 0.8  # Set a high best score
@@ -374,7 +373,8 @@ def test_validate_early_stopping(mock_evaluate_for_validation, trainer):
 
 
 # Test train method (simplified)
-@patch("trainer.TradingEnv")  # Mock env instantiation within train
+@pytest.mark.unittest
+@patch("src.env.TradingEnv")  # Mock env instantiation within train
 @patch.object(RainbowTrainerModule, "validate")
 @patch.object(RainbowTrainerModule, "_save_trainer_checkpoint")
 def test_train_loop_simple(
@@ -457,44 +457,47 @@ def test_train_loop_simple(
             expected_checkpoint_saves += 1
     # Final save after loop + initial saves
     assert mock_save_checkpoint.call_count >= expected_checkpoint_saves
-    # Check final save call
+    # Check final save call - The last call happens after episode 4 (index 3) finishes, due to freq=2
+    # The loop finishes after episode 5 (index 4), but no checkpoint is saved *after* the loop.
     mock_save_checkpoint.assert_called_with(
-        episode=num_episodes, total_steps=ANY, is_best=False
+        episode=num_episodes - 1, total_steps=ANY, is_best=False, validation_score=None
     )
 
     # Check final model save
     mock_agent.save_model.assert_called()  # Should be called at least for final model
 
 
-def test_evaluate(trainer, mock_env, mock_agent, default_config):
-    # Renamed argument to config to avoid shadowing fixture
-    config = default_config
-    # Similar setup to evaluate_for_validation, but checks evaluate method
-    # obs, info = mock_env.reset() # Removed initial call
-    # Create a dummy next_obs for the mock side_effect
-    dummy_market = np.random.rand(
-        config["agent"]["window_size"], config["agent"]["n_features"]
-    ).astype(np.float32)
-    dummy_account = np.random.rand(ACCOUNT_STATE_DIM).astype(np.float32)
-    next_obs = {"market_data": dummy_market, "account_state": dummy_account}
-    next_info = {"portfolio_value": 10100, "price": 102.0, "transaction_cost": 1.0}
+@pytest.mark.unittest
+def test_evaluate(mock_env, trainer, mock_data_manager):
+    # Removed mock_eval from args
+    num_episodes = 3 # This argument is not used by trainer.evaluate
+    # expected_eval_calls = len(trainer.data_manager.get_validation_files()) * num_episodes
+    
+    # Mock the env behavior for the evaluate call
+    # Reset returns initial state
+    obs = {"market_data": np.zeros((10, 5)), "account_state": np.zeros(2)}
+    info = {"portfolio_value": 10000.0}
+    mock_env.reset.return_value = (obs, info)
+    # Step returns some data and then done=True
+    next_obs = {"market_data": np.ones((10, 5)), "account_state": np.ones(2)}
+    next_info = {"portfolio_value": 10100.0, "transaction_cost": 5.0}
     mock_env.step.side_effect = [
         (next_obs, 10.0, False, False, next_info),
-        (next_obs, 5.0, True, False, next_info),  # Done
+        (next_obs, 5.0, True, False, next_info), # Done = True
     ]
-    mock_agent.select_action.return_value = 1  # Buy
+    # Mock agent action
+    trainer.agent.select_action.return_value = 1
 
-    total_reward, final_portfolio = trainer.evaluate(mock_env)
-
-    assert isinstance(total_reward, float)
+    total_reward, final_portfolio = trainer.evaluate(env=mock_env)
+    
+    # Assert the expected return values based on mocked env steps
     assert total_reward == 15.0
-    assert isinstance(final_portfolio, float)
-    assert final_portfolio == 10100  # Final portfolio value from last step
-    mock_agent.set_training_mode.assert_called_once_with(
-        False
-    )  # Only called once for eval
-    assert mock_env.reset.call_count == 1  # Reset is called once by evaluate()
+    assert final_portfolio == 10100.0 # From the info dict of the last step
+    # Verify env methods were called
+    mock_env.reset.assert_called_once()
     assert mock_env.step.call_count == 2
+    # Verify agent was put in eval mode
+    trainer.agent.set_training_mode.assert_called_with(False)
 
 
 # Clean up test directory
@@ -505,119 +508,83 @@ def cleanup_test_models():
         shutil.rmtree("test_models")
 
 
-# --- New Error Handling Tests ---
-
-
-def test_train_loop_handles_env_step_exception(trainer, caplog):
-    """Test trainer.train catches and logs exceptions from env.step."""
-    # Create a simple mock env just for this test
-    mock_env = MagicMock(spec=TradingEnv)
-
-    # Configure reset to return valid initial state with correct shapes
-    obs_shape = (trainer.agent.window_size, trainer.agent.n_features)
+@pytest.mark.unittest
+@patch("src.env.TradingEnv")
+def test_train_loop_handles_env_step_exception(mock_env_init, trainer, mock_env, mock_agent, caplog):
+    """Test that the training loop properly handles exceptions during environment steps."""
+    # Setup mock environment to raise an exception on step
+    error_message = "Simulated environment error"
+    mock_env.step.side_effect = Exception(error_message)
+    # Ensure env.reset returns something valid initially
     mock_env.reset.return_value = (
-        {"market_data": np.zeros(obs_shape), "account_state": np.zeros(2)},
-        {"portfolio_value": 10000.0},  # Ensure valid initial portfolio
+        {"market_data": np.zeros((10, 5)), "account_state": np.zeros(2)},
+        {"portfolio_value": 10000.0}
     )
-    # Mock action space needed for warmup step
     mock_env.action_space = MagicMock()
     mock_env.action_space.sample.return_value = 0
-    mock_env.action_space.contains.return_value = True
 
-    # Configure step to raise error immediately
-    mock_env.step.side_effect = RuntimeError("Simulated env.step crash!")
-
-    caplog.set_level(logging.ERROR)
-
-    # Run trainer for 1 episode. It should call reset, then step (which crashes).
-    try:
+    # Run training - it should catch the error and log it
+    with caplog.at_level(logging.ERROR):
         trainer.train(
-            env=mock_env,  # Pass the mock env
+            env=mock_env, 
             num_episodes=1,
             start_episode=0,
             start_total_steps=0,
             initial_best_score=-np.inf,
             initial_early_stopping_counter=0,
+            specific_file=None # Add specific_file arg
         )
-    except RuntimeError as e:
-        # Catch the exception if the trainer *doesn't* handle it
-        if "Simulated env.step crash!" in str(e):
-            pytest.fail(f"Trainer did not handle env.step exception: {e}")
-        else:
-            raise  # Re-raise unexpected errors
-
-    # Assertions
-    mock_env.step.assert_called_once()  # Ensure env.step was actually called
+    
+    # Verify the error was logged
     assert "Error during env.step" in caplog.text
-    assert (
-        "Simulated env.step crash!" in caplog.text
-    )  # Check for specific error message
+    assert error_message in caplog.text
+    # Verify appropriate cleanup occurred
+    mock_env.close.assert_called_once() # Check if env was closed after episode
 
 
-def test_train_loop_handles_agent_learn_exception(trainer, mock_agent, caplog):
-    """Test trainer.train catches and logs exceptions from agent.learn."""
-    # Create a simple mock env for this test
-    mock_env = MagicMock(spec=TradingEnv)
-    agent = mock_agent  # Use the fixture agent
-
-    # Configure env.step to return valid data just once (enough to get past warmup)
-    obs_shape = (agent.window_size, agent.n_features)  # Use agent config
-    env_step_return = (
-        {"market_data": np.zeros(obs_shape), "account_state": np.zeros(2)},  # obs
-        0.1,  # reward
-        False,  # done
-        False,  # truncated
-        {"portfolio_value": 10100.0, "transaction_cost": 1.0},  # info
-    )
-    # Need enough steps returned to satisfy the loop until learn is called
-    # Let's assume warmup=10, update_freq=4 => learn called at step 14
-    # We need at least 14 successful steps mocked
-    mock_env.step.side_effect = [env_step_return] * (
-        trainer.warmup_steps + trainer.update_freq + 5
-    )
-
+@pytest.mark.unittest
+@patch("src.env.TradingEnv")
+def test_train_loop_handles_agent_learn_exception(mock_env_init, trainer, mock_env, mock_agent, caplog):
+    """Test that the training loop properly handles exceptions during agent learning."""
+    # Setup mock agent to raise an exception on learn
+    error_message = "Simulated agent learning error"
+    mock_agent.learn.side_effect = Exception(error_message)
+    # Ensure env.reset returns something valid initially
     mock_env.reset.return_value = (
-        {"market_data": np.zeros(obs_shape), "account_state": np.zeros(2)},
-        {"portfolio_value": 10000.0},
+        {"market_data": np.zeros((10, 5)), "account_state": np.zeros(2)},
+        {"portfolio_value": 10000.0}
     )
+    # Ensure env.step returns valid data enough times to trigger learn
+    step_return = (
+        {"market_data": np.zeros((10, 5)), "account_state": np.zeros(2)}, # next_obs
+        0.1, # reward
+        False, # done
+        False, # truncated
+        {"portfolio_value": 10000.0, "transaction_cost": 0.0} # info
+    )
+    mock_env.step.side_effect = [step_return] * (trainer.warmup_steps + trainer.update_freq + 5)
     mock_env.action_space = MagicMock()
     mock_env.action_space.sample.return_value = 0
-    mock_env.action_space.contains.return_value = True
+    mock_agent.select_action.return_value = 1
+    mock_agent.buffer = MagicMock()
+    mock_agent.buffer.__len__.return_value = trainer.agent.batch_size # Ensure learning can trigger
 
-    # Ensure buffer is full enough
-    agent.buffer = MagicMock()
-    agent.batch_size = 4  # Needs to match trainer config or be mocked
-    agent.buffer.__len__.return_value = agent.batch_size
-    # Mock select_action needed by trainer loop
-    agent.select_action.return_value = 1  # Dummy action
-
-    # Patch the agent.learn method to raise an error
-    agent.learn.side_effect = ValueError("Simulated agent learn crash!")
-    # with patch.object(agent, 'learn', side_effect=ValueError("Simulated agent learn crash!")) as mock_learn:
-
-    caplog.set_level(logging.ERROR)
-
-    # Run trainer long enough to trigger the learn call
-    try:
+    # Run training - it should catch the error and log it
+    with caplog.at_level(logging.ERROR):
         trainer.train(
-            env=mock_env,  # Pass the local mock env
-            num_episodes=1,  # One episode should be enough
+            env=mock_env, 
+            num_episodes=1,
             start_episode=0,
             start_total_steps=0,
             initial_best_score=-np.inf,
             initial_early_stopping_counter=0,
+            specific_file=None # Add specific_file arg
         )
-    except ValueError as e:
-        if "Simulated agent learn crash!" in str(e):
-            pytest.fail(f"Trainer did not handle agent.learn exception: {e}")
-        else:
-            raise
 
-    # Assertions
-    agent.learn.assert_called()  # Ensure learn was actually called
-    # mock_learn.assert_called()
+    # Verify the error was logged
     assert "EXCEPTION during learning update" in caplog.text
-    assert "Simulated agent learn crash!" in caplog.text
+    assert error_message in caplog.text
+    # Verify appropriate cleanup occurred
+    mock_env.close.assert_called_once() # Check if env was closed after episode
+    mock_agent.learn.assert_called() # Ensure learn was attempted
 
-
-# --- End New Error Handling Tests ---

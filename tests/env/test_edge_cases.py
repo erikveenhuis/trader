@@ -3,6 +3,7 @@ import pandas as pd
 import sys
 from pathlib import Path
 import tempfile
+import unittest
 
 # Remove sys.path manipulation
 # project_root = Path(__file__).resolve().parent.parent.parent # Adjust based on actual structure
@@ -32,7 +33,8 @@ INITIAL_BALANCE = 100.0  # Use smaller balance for edge cases
 TRANSACTION_FEE = 0.01  # Higher fee
 
 
-class TestTradingEnvEdgeCases:
+@pytest.mark.unittest
+class TestTradingEnvEdgeCases(unittest.TestCase):
     """Tests specific edge cases like zero price."""
 
     def setup_method(self, method):

@@ -4,6 +4,8 @@ import logging
 import math  # Import math for positional encoding calculation
 import torch.nn.functional as F
 from typing import Dict, Any  # Added for type hinting
+from .buffer import Experience
+from .constants import ACCOUNT_STATE_DIM
 
 logger = logging.getLogger("TransformerModel")
 
@@ -136,24 +138,29 @@ class PositionalEncoding(nn.Module):
 
 # --- Start: Rainbow Network Definition ---
 class RainbowNetwork(nn.Module):
-    def __init__(
-        self, config: Dict[str, Any], device: torch.device
-    ):  # Accept config dict
+    def __init__(self, config: Dict[str, Any], device: torch.device):
         super(RainbowNetwork, self).__init__()
 
-        # Extract parameters from config
+        # Extract parameters from config - NO DEFAULTS, will raise KeyError if missing
         self.window_size = config["window_size"]
         self.n_features = config["n_features"]
-        self.hidden_dim = config["hidden_dim"]
+        self.hidden_dim = config["hidden_dim"] # Also embedding dim
         self.num_actions = config["num_actions"]
         self.num_atoms = config["num_atoms"]
         self.v_min = config["v_min"]
         self.v_max = config["v_max"]
-        nhead = config.get("transformer_nhead", 2)  # Default if not in config
-        num_encoder_layers = config.get(
-            "transformer_layers", 1
-        )  # Default if not in config
-        dropout = config.get("dropout", 0.1)  # Default if not in config
+        # Transformer specific params
+        self.nhead = config["nhead"]
+        self.num_encoder_layers = config["num_encoder_layers"]
+        self.dim_feedforward = config["dim_feedforward"]
+        self.transformer_dropout = config["transformer_dropout"]
+        
+        # Check validity
+        assert self.hidden_dim % self.nhead == 0, f"hidden_dim ({self.hidden_dim}) must be divisible by nhead ({self.nhead})"
+        assert ACCOUNT_STATE_DIM == 2, "ACCOUNT_STATE_DIM mismatch"
+
+        logger.info(f"Initializing RainbowNetwork with hidden_dim={self.hidden_dim}")
+
         self.device = device
 
         # Save configuration
@@ -165,20 +172,22 @@ class RainbowNetwork(nn.Module):
         # --- Shared Feature Extractor (Similar to Actor/Critic start) ---
         self.feature_embedding = nn.Linear(self.n_features, self.hidden_dim)
         self.pos_encoder = PositionalEncoding(
-            self.hidden_dim, dropout=dropout, max_len=self.window_size
+            self.hidden_dim, dropout=self.transformer_dropout, max_len=self.window_size
         )
-        encoder_layers = nn.TransformerEncoderLayer(
-            d_model=self.hidden_dim,
-            nhead=nhead,
-            dim_feedforward=self.hidden_dim * 2,
-            dropout=dropout,
-            batch_first=True,
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=self.hidden_dim, 
+            nhead=self.nhead, # Use config value
+            dim_feedforward=self.dim_feedforward, # Use config value
+            dropout=self.transformer_dropout, # Use config value
+            activation="relu", 
+            batch_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers=num_encoder_layers
+            encoder_layer, 
+            num_layers=self.num_encoder_layers # Use config value
         )
         self.account_processor = nn.Sequential(
-            nn.Linear(2, self.hidden_dim // 4), nn.ReLU(), nn.Dropout(dropout)
+            nn.Linear(2, self.hidden_dim // 4), nn.ReLU(), nn.Dropout(self.transformer_dropout)
         )
         # --- End Shared Feature Extractor ---
 

@@ -1,0 +1,23 @@
+# Configuration for scripts/data_processing.py
+
+# Paths are relative to the project root when loaded by the script
+raw_dir: data/raw
+output_dir: data/processed
+
+# Processing options
+max_workers: 12
+filter_complete_days: true
+clear_output: true
+filter_usd_only: true
+year_filter: null # Set to a string like "2025" to filter, or null/None to process all
+
+# Splitting options
+perform_split: true
+# train_ratio: 0.9 # Proportion of time-series data for training (DEPRECATED)
+# val_ratio: 0.05 # Proportion of time-series data for validation (DEPRECATED)
+test_ratio: 0.10 # Proportion of files for the final test set (random split)
+validation_size: 20 # Number of files to select for validation set from initial train pool
+seed: 42 # Random seed for reproducible train/test split
+train_subdir: train
+val_subdir: validation
+test_subdir: test 

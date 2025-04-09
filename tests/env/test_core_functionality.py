@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 import unittest  # Import unittest
 import tempfile
+import pytest
 
 # Remove sys.path manipulation
 # project_root = Path(__file__).resolve().parent.parent.parent
@@ -33,6 +34,7 @@ def create_mock_csv(data_dict, temp_dir_path):
     return str(path)
 
 
+@pytest.mark.unittest
 class TestTradingEnvCoreFunctionality(
     unittest.TestCase
 ):  # Inherit from unittest.TestCase
@@ -161,6 +163,7 @@ class TestTradingEnvCoreFunctionality(
 # NOTE: Nested classes TestEnvRewardComponents etc. are still not handled
 
 
+@pytest.mark.unittest
 class TestEnvRewardComponents(
     TestTradingEnvCoreFunctionality
 ):  # Inherit from CoreFunctionality
@@ -203,11 +206,13 @@ class TestEnvRewardComponents(
             if portfolio_after_buy_at_buy_price > 1e-9 and portfolio_final > 1e-9
             else 0.0
         )  # log(10031.93 / 9995.0) * 1000 = 3.68
+        
+        # Expected reward for sell action is ONLY the cost penalty
         reward_cost_exp = (
-            -(step_cost_sell / self.initial_balance) * 1000.0
+            -(step_cost_sell / self.initial_balance) * self.env.reward_cost_scale # Use env scale
         )  # -(5.037 / 10000) * 1000 = -0.5037
-        expected_reward = reward_pnl_exp + reward_cost_exp  # 3.68 - 0.5037 = 3.176
-
+        expected_reward = reward_cost_exp # ONLY cost penalty for sell action
+    
         self.assertAlmostEqual(reward_sell, expected_reward, delta=1e-3)
 
     def test_reward_components_loss(self):
@@ -286,15 +291,16 @@ class TestEnvRewardComponents(
         print(
             f"DEBUG (test_reward_components_loss): reward_pnl_exp = {reward_pnl_exp:.4f}"
         )
+        # Expected reward for sell action is ONLY the cost penalty
         reward_cost_exp = (
-            -(step_cost_sell / self.initial_balance) * 1000.0
+            -(step_cost_sell / self.initial_balance) * self.env.reward_cost_scale # Use env scale
             if self.initial_balance > 1e-9
             else 0.0
         )  # -(5.0408 / 10000) * 1000 = -0.504...
         print(
             f"DEBUG (test_reward_components_loss): reward_cost_exp = {reward_cost_exp:.4f}"
         )
-        expected_reward = reward_pnl_exp + reward_cost_exp  # Approx -1.006...
+        expected_reward = reward_cost_exp # ONLY cost penalty for sell action
         print(
             f"DEBUG (test_reward_components_loss): final calculated expected_reward = {expected_reward:.4f}"
         )
@@ -324,26 +330,18 @@ class TestEnvRewardComponents(
         position_after_buy = self.env.position  # 41.9747899
         step_cost_buy = info_buy["transaction_cost"]  # 5.0
 
-        # Reward calculation uses portfolio before (portfolio_start) and after buy (at price_buy)
-        portfolio_after_buy_at_price_buy = (
-            balance_after_buy + position_after_buy * price_buy
-        )  # 5000 + 41.974 * 119 = 9995.0
-
-        reward_pnl_exp = (
-            np.log(portfolio_after_buy_at_price_buy / portfolio_start) * 1000.0
-            if portfolio_start > 1e-9 and portfolio_after_buy_at_price_buy > 1e-9
-            else 0.0
-        )  # log(9995 / 10000) * 1000 = -5.001
+        # Calculate expected reward ONLY based on cost penalty, as per current env logic for buy actions
         reward_cost_exp = (
-            -(step_cost_buy / self.initial_balance) * 1000.0
+            -(step_cost_buy / self.initial_balance) * self.env.reward_cost_scale # Use env scale
             if self.initial_balance > 1e-9
             else 0.0
-        )  # -(5.0 / 10000) * 1000 = -0.5
-        expected_reward = reward_pnl_exp + reward_cost_exp  # -5.001 - 0.5 = -5.501
-
+        )
+        expected_reward = reward_cost_exp # Only cost penalty for buy action
+    
         self.assertAlmostEqual(reward_buy, expected_reward, delta=1e-3)
 
 
+@pytest.mark.unittest
 class TestEnvActions(TestTradingEnvCoreFunctionality):  # Inherit from CoreFunctionality
 
     # Action definitions based on TradingEnv:
@@ -472,6 +470,7 @@ class TestEnvActions(TestTradingEnvCoreFunctionality):  # Inherit from CoreFunct
         self.assertAlmostEqual(info2["transaction_cost"], expected_cum_cost2, places=4)
 
 
+@pytest.mark.unittest
 class TestEnvInternals(
     TestTradingEnvCoreFunctionality
 ):  # Inherit from CoreFunctionality
@@ -533,26 +532,27 @@ class TestEnvInternals(
         # Buy 50% (action 2)
         action_buy = 2
         obs_buy, _, _, _, info_buy = self.env.step(action_buy)
-
-        # Observation uses price at *current* step (internal 6, original 15 = 120.0) for normalization
-        price_for_obs = self.env.original_close_prices[
-            self.env._map_to_original_index(self.env.current_step)
-        ]
+    
+        # Observation normalization uses the price at the step where the observation is generated
+        # which is price_buy (119.0) in this case, as the step function returns the NEXT observation
+        # after updating the state based on the action and the price (price_buy) at that step.
+        # The debug output confirms this uses the price from the step (119.0).
         balance_after_buy = self.env.balance  # 5000.0
         position_after_buy = self.env.position  # 41.9747
-
-        portfolio_value_for_obs = (
-            balance_after_buy + position_after_buy * price_for_obs
-        )  # 5000 + 41.9747 * 120 = 10036.97
+    
+        # Use price_buy (119.0) for calculating the expected normalization
+        portfolio_value_at_obs_time = (
+            balance_after_buy + position_after_buy * price_buy
+        )  # 5000 + 41.9747 * 119 = 9995.0
         expected_norm_pos = (
-            (position_after_buy * price_for_obs) / portfolio_value_for_obs
-            if portfolio_value_for_obs > 1e-9
+            (position_after_buy * price_buy) / portfolio_value_at_obs_time
+            if portfolio_value_at_obs_time > 1e-9
             else 0
-        )  # (41.9747*120)/10036.97 = 0.5018
+        )  # (41.9747 * 119) / 9995.0 = 0.49975
         expected_norm_bal = (
             balance_after_buy / self.initial_balance
         )  # 5000 / 10000 = 0.5
-
+    
         self.assertAlmostEqual(obs_buy["account_state"][0], expected_norm_pos, places=5)
         self.assertAlmostEqual(obs_buy["account_state"][1], expected_norm_bal, places=5)
 

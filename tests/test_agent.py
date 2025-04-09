@@ -5,25 +5,19 @@ import os
 import sys
 import shutil
 
-# Re-adding sys.path manipulation for this file
-src_path = os.path.abspath(
-    os.path.join(os.path.dirname(__file__), "../src")
-)  # Path adjusted from tests/ to src/
-if src_path not in sys.path:
-    sys.path.insert(0, src_path)
+# Remove sys.path manipulation
+# src_path = os.path.abspath(
+#     os.path.join(os.path.dirname(__file__), "../src")
+# )  # Path adjusted from tests/ to src/
+# if src_path not in sys.path:
+#     sys.path.insert(0, src_path)
 
-try:
-    # Revert to direct imports
-    from agent import RainbowDQNAgent, ACCOUNT_STATE_DIM
-    from buffer import PrioritizedReplayBuffer
-    from model import RainbowNetwork
-except ImportError as e:
-    print(f"Failed to import required modules directly: {e}")
-    print(f"Current sys.path: {sys.path}")
-    pytest.skip(
-        f"Skipping agent tests due to import error: {e}", allow_module_level=True
-    )
+# Use absolute imports from src
+from src.agent import RainbowDQNAgent, ACCOUNT_STATE_DIM
+from src.buffer import PrioritizedReplayBuffer
+from src.model import RainbowNetwork
 
+# Remove pytest.skip block
 
 # --- Test Configuration ---
 @pytest.fixture(scope="module")
@@ -49,6 +43,16 @@ def default_config():
         "num_actions": 3,  # e.g., Hold, Buy, Sell
         "debug": True,  # Enable debug checks
         "grad_clip_norm": 10.0,
+        # Add missing network params required by RainbowNetwork
+        "transformer_nhead": 2, # Value from test_model config
+        "transformer_layers": 1, # Value from test_model config
+        "dropout": 0.1, # Value from test_model config
+        # Rename transformer_nhead to nhead for consistency with error? Check RainbowNetwork init
+        # --> Checking model.py: RainbowNetwork expects nhead, n_layers, dropout directly
+        "nhead": 2, 
+        "num_encoder_layers": 1, # Add correct key
+        "dim_feedforward": 256, # hidden_dim * 4 = 64 * 4
+        "transformer_dropout": 0.1, # Add missing key
     }
 
 
@@ -82,7 +86,7 @@ def generate_dummy_observation(config):
 
 # --- Test Cases ---
 
-
+@pytest.mark.unittest
 def test_agent_initialization(agent, default_config):
     """Tests if the agent initializes components correctly."""
     assert agent is not None
@@ -105,6 +109,7 @@ def test_agent_initialization(agent, default_config):
         assert str(param.device).startswith(agent.device)
 
 
+@pytest.mark.unittest
 def test_select_action(agent, default_config):
     """Tests the select_action method."""
     obs = generate_dummy_observation(default_config)
@@ -124,6 +129,7 @@ def test_select_action(agent, default_config):
     assert agent.network.training is False  # Should be in eval mode
 
 
+@pytest.mark.unittest
 def test_store_transition_and_n_step(agent, default_config):
     """Tests storing transitions and n-step buffer logic."""
     n_steps = default_config["n_steps"]
@@ -157,6 +163,7 @@ def test_store_transition_and_n_step(agent, default_config):
     assert len(agent.buffer) <= buffer_capacity
 
 
+@pytest.mark.unittest
 def test_learn_step(agent, default_config, mocker):
     """Tests a single learning step, mocking buffer sample."""
     batch_size = default_config["batch_size"]
@@ -252,6 +259,7 @@ def test_learn_step(agent, default_config, mocker):
         agent._update_target_network.assert_not_called()
 
 
+@pytest.mark.unittest
 def test_target_network_update(agent, default_config):
     """Tests if the target network updates correctly."""
     # Ensure network and target network start differently (modify one slightly)
@@ -286,6 +294,7 @@ def test_target_network_update(agent, default_config):
     assert params_updated, "Target network parameters should have changed after update."
 
 
+@pytest.mark.unittest
 def test_save_load_model(agent, default_config):
     """Tests saving and loading the agent's state."""
     save_dir = "test_agent_save"
@@ -355,6 +364,7 @@ def test_save_load_model(agent, default_config):
 
 
 # --- Test Configuration Compatibility Check on Load ---
+@pytest.mark.unittest
 def test_load_model_config_mismatch(agent, default_config, mocker, caplog):
     """Tests loading a model with a mismatched configuration."""
     save_dir = "test_agent_save_mismatch"
@@ -379,7 +389,8 @@ def test_load_model_config_mismatch(agent, default_config, mocker, caplog):
     mismatched_agent = RainbowDQNAgent(config=mismatched_config, device=device)
 
     # Mock logger to capture warnings
-    mock_logger = mocker.patch("agent.logger")  # Patch logger inside the agent module
+    # Use absolute path for patching
+    mock_logger = mocker.patch("src.agent.logger")  # Patch logger inside the agent module
 
     # Load the model saved with the original config
     mismatched_agent.load_model(save_prefix)
@@ -398,6 +409,7 @@ def test_load_model_config_mismatch(agent, default_config, mocker, caplog):
     shutil.rmtree(save_dir)
 
 
+@pytest.mark.unittest
 def test_set_training_mode(agent):
     """Tests setting the training mode."""
     # Initial state is training=True from fixture

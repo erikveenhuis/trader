@@ -47,6 +47,7 @@ def dummy_data_structure(tmp_path):
 # --- Test Cases ---
 
 
+@pytest.mark.unittest
 def test_data_manager_init_success(dummy_data_structure):
     """Test successful initialization when data directories exist."""
     base_dir = dummy_data_structure
@@ -64,6 +65,7 @@ def test_data_manager_init_success(dummy_data_structure):
         pytest.fail(f"DataManager initialization failed unexpectedly: {e}")
 
 
+@pytest.mark.unittest
 def test_data_manager_init_missing_processed(tmp_path, caplog):
     """Test initialization raises FileNotFoundError if the processed directory is missing."""
     base_dir = tmp_path
@@ -83,6 +85,7 @@ def test_data_manager_init_missing_processed(tmp_path, caplog):
     # assert "Processed data directory 'processed' not found" in caplog.text
 
 
+@pytest.mark.unittest
 def test_data_manager_organize_data_success(dummy_data_structure):
     """Test that organize_data correctly finds the files."""
     base_dir = dummy_data_structure
@@ -103,6 +106,7 @@ def test_data_manager_organize_data_success(dummy_data_structure):
         pytest.fail(f"organize_data failed unexpectedly: {e}")
 
 
+@pytest.mark.unittest
 def test_data_manager_organize_data_missing_train_dir(dummy_data_structure):
     """Test organize_data fails if the train directory is missing."""
     base_dir = dummy_data_structure
@@ -120,6 +124,7 @@ def test_data_manager_organize_data_missing_train_dir(dummy_data_structure):
     # print(f"[Test Missing Train Dir] Correctly raised AssertionError")
 
 
+@pytest.mark.unittest
 def test_data_manager_get_random_training_file(dummy_data_structure):
     """Test retrieving a random training file."""
     base_dir = dummy_data_structure
