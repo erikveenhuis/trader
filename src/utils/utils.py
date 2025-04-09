@@ -19,8 +19,14 @@ training_log_path = LOGS_DIR / "training.log"
 # Define other log paths as needed
 
 
-def setup_global_logging(log_file_path, root_level=logging.INFO, level_overrides=None):
-    """Setup global logging to console and a specified file."""
+def setup_global_logging(
+    log_file_path, 
+    root_level=logging.INFO, 
+    level_overrides=None,
+    max_bytes=1*1024*1024, # Add max_bytes param (e.g., 1MB)
+    backup_count=10         # Add backup_count param
+    ):
+    """Setup global logging to console and a rotating file."""
     root_logger = logging.getLogger()
     root_logger.setLevel(root_level)  # Set the minimum level for the root logger
 
@@ -39,15 +45,20 @@ def setup_global_logging(log_file_path, root_level=logging.INFO, level_overrides
     console_handler.setFormatter(formatter)
     console_handler.setLevel(logging.INFO)  # Console handler level
 
-    # Create File Handler (mode='a' for append)
-    file_handler = logging.FileHandler(log_file_path, mode="a")
+    # Create Rotating File Handler (mode='a' is default for rotating)
+    # Use RotatingFileHandler instead of FileHandler
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file_path, 
+        maxBytes=max_bytes, 
+        backupCount=backup_count
+        )
     file_handler.setFormatter(formatter)
     file_handler.setLevel(root_level)  # File handler level (usually same as root)
 
     # Add handlers to the root logger
     root_logger.addHandler(console_handler)
     root_logger.addHandler(file_handler)
-    logging.info(f"Logging setup: Console and {log_file_path}")
+    logging.info(f"Logging setup: Console and rotating file {log_file_path} (max: {max_bytes//(1024*1024)}MB, backups: {backup_count})")
 
     # Apply specific level overrides
     if level_overrides:
