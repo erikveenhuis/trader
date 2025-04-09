@@ -440,7 +440,7 @@ class RainbowTrainerModule:
                         f"MeanRew-{self.log_freq}={mean_recent_reward:.4f}, "
                         f"MeanLoss-{self.log_freq}={mean_recent_loss:.4f}, " # Add Mean Loss
                         f"Price=${info.get('price', 0):.8f}, TxCost=${info.get('transaction_cost', 0):.2f}, "
-                        f"Balance=${self.balance:.2f}, Position={self.position:.4f}"
+                        f"Balance=${info.get('balance', 0.0):.2f}, Position={info.get('position', 0.0):.4f}"
                     )
                     # --- DEBUG: Verify logged TxCost --- 
                     # print(f"[DEBUG Trainer Log] Step: {steps}, info['transaction_cost']={info.get('transaction_cost', 'N/A'):.4f}")
