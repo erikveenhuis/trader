@@ -39,7 +39,7 @@ setup_global_logging(log_file_path=log_file, root_level=logging.INFO)
 logger = logging.getLogger("Main")
 
 
-def run_training(config: dict, data_manager: DataManager):
+def run_training(config: dict, data_manager: DataManager, resume_training_flag: bool):
     """Runs the training loop for the Rainbow DQN agent."""
     # Extract relevant config sections directly (will raise KeyError if missing)
     agent_config = config['agent']
@@ -49,11 +49,13 @@ def run_training(config: dict, data_manager: DataManager):
     
     # Get run parameters, using .get() only for genuinely optional/defaultable values
     model_dir = run_config.get('model_dir', 'models') # Allow default
-    resume_training = run_config.get('resume', False) # Allow default
+    # resume_training = run_config.get('resume', False) # Resume status now comes from flag
     num_episodes = run_config.get('episodes', 1000) # Allow default
     specific_file = run_config.get('specific_file', None) # Allow default (None)
 
     set_seeds(trainer_config['seed'])
+    # Update config dict to reflect actual resume status from flag for logging
+    config['run']['resume'] = resume_training_flag 
     logger.info(f"Running training with config: {config}")
 
     # Determine device
@@ -90,74 +92,79 @@ def run_training(config: dict, data_manager: DataManager):
     # Buffer state loading is typically not done, but agent load_model now handles optimizer/steps
     # --- End Initialization ---
 
-    # --- Load from Checkpoint if resuming ---
-    if resume_training:
-        # Find the latest valid checkpoint file (Agent save/load now uses suffix _rainbow_agent.pt)
-        checkpoint_path = find_latest_checkpoint(model_dir, suffix="_rainbow_agent.pt")
-        if checkpoint_path:
-            # Load only metadata needed by trainer, agent loads its own state later
-            checkpoint = load_checkpoint(
-                checkpoint_path, map_location="cpu"
-            )  # Load to CPU first
-            if checkpoint:
-                # Extract necessary state from the loaded checkpoint dictionary
-                # Agent now saves/loads total_steps internally, trainer might need start_episode
-                start_episode = checkpoint.get(
-                    "episode", 0
-                )  # Trainer might save this separately if needed
-                start_total_steps = checkpoint.get("total_train_steps", 0)
-                initial_best_score = checkpoint.get("best_validation_metric", -np.inf)
-                initial_early_stopping_counter = checkpoint.get(
-                    "early_stopping_counter", 0
-                )
-                # Logging is now handled within load_checkpoint
-                logger.info(
-                    f"Resuming training from episode {start_episode}, step {start_total_steps}"
-                )
-            else:
-                logger.warning("Failed to load checkpoint data, starting from scratch.")
-        else:
-            logger.warning(
-                "Resume specified but no checkpoint found, starting from scratch."
-            )
+    # --- Load from Checkpoint if resuming --- 
+    agent_loaded = False # Flag to track if agent state was successfully loaded
+    if resume_training_flag:
+        # --- MODIFIED: Prioritize loading TRAINER state first ---
+        trainer_checkpoint_path = str(Path(model_dir) / "checkpoint_trainer_latest.pt")
+        agent_checkpoint_prefix = str(Path(model_dir) / "rainbow_transformer_latest") # Agent prefix
 
-    # --- Instantiate Agent ---
-    agent = AgentClass(
-        config=agent_config,  # Pass the agent's config section
-        device=device,
-    )
-    assert isinstance(agent, RainbowDQNAgent), "Failed to instantiate RainbowDQNAgent"
+        if os.path.exists(trainer_checkpoint_path):
+            logger.info(f"Found latest trainer checkpoint: {trainer_checkpoint_path}")
+            # Load trainer checkpoint first to get episode etc.
+            trainer_checkpoint = load_checkpoint(trainer_checkpoint_path)
+            if trainer_checkpoint:
+                start_episode = trainer_checkpoint.get("episode", 0)
+                # Store trainer's step count for logging, but prioritize agent's later
+                trainer_steps = trainer_checkpoint.get("total_train_steps", 0) 
+                initial_best_score = trainer_checkpoint.get("best_validation_metric", -np.inf)
+                initial_early_stopping_counter = trainer_checkpoint.get("early_stopping_counter", 0)
+                logger.info(f"Loaded trainer state: Starting from Ep {start_episode}, BestScore {initial_best_score:.4f}")
+
+                # --- MODIFIED: Now attempt to load the corresponding LATEST agent state --- 
+                # Check if the corresponding agent file exists
+                agent_pt_path = f"{agent_checkpoint_prefix}_rainbow_agent.pt"
+                if os.path.exists(agent_pt_path):
+                    try:
+                        # Instantiate agent *before* loading state
+                        agent = AgentClass(config=agent_config, device=device)
+                        logger.info(f"Attempting to load agent state from prefix: {agent_checkpoint_prefix}")
+                        agent.load_model(agent_checkpoint_prefix) # Load latest agent state
+                        # Overwrite start_total_steps with the definitive value from the agent
+                        start_total_steps = agent.total_steps 
+                        logger.info(f"Successfully loaded LATEST agent state. Resuming from step {start_total_steps}.")
+                        # Sanity check trainer steps vs agent steps
+                        if start_total_steps != trainer_steps:
+                             logger.warning(f"Agent steps ({start_total_steps}) differ from trainer checkpoint steps ({trainer_steps}). Using agent steps.")
+                        agent_loaded = True # Flag that agent state was loaded
+                    except Exception as e:
+                         logger.error(f"Error loading LATEST agent state from {agent_checkpoint_prefix}: {e}. Training starts with fresh agent.", exc_info=True)
+                         # Reset state as loading failed
+                         start_episode = 0
+                         start_total_steps = 0
+                         initial_best_score = -np.inf
+                         initial_early_stopping_counter = 0
+                         # agent = AgentClass(config=agent_config, device=device) # Re-init fresh agent - will be handled below if agent_loaded is False
+                         agent_loaded = False
+                else:
+                    logger.warning(f"Latest agent checkpoint file {agent_pt_path} not found. Starting with fresh agent state.")
+                    start_episode = 0 # Reset episode if agent state missing
+                    start_total_steps = 0
+                    initial_best_score = -np.inf
+                    initial_early_stopping_counter = 0
+                    # agent = AgentClass(config=agent_config, device=device) # Init fresh agent - handled below
+                    agent_loaded = False
+            else:
+                logger.warning(f"Failed to load data from trainer checkpoint {trainer_checkpoint_path}. Starting training from scratch.")
+                # agent = AgentClass(config=agent_config, device=device) - handled below
+                agent_loaded = False
+        else:
+            logger.warning(f"Trainer checkpoint {trainer_checkpoint_path} not found. Starting training from scratch.")
+            # agent = AgentClass(config=agent_config, device=device) - handled below
+            agent_loaded = False
+    # else: # Not resuming handled below
+        # agent = AgentClass(config=agent_config, device=device)
+        # agent_loaded = False
+
+    # --- Ensure agent is instantiated if not loaded during resume attempt --- 
+    if not agent_loaded:
+         logger.info("Instantiating fresh agent.")
+         agent = AgentClass(config=agent_config, device=device) 
+
+    assert isinstance(agent, RainbowDQNAgent), "Agent not instantiated correctly"
     logger.info(
         f"Agent instantiated with {sum(p.numel() for p in agent.network.parameters()):,} parameters."
     )
-
-    # --- Load Agent State (Network, Optimizer, Steps) if resuming ---
-    if (
-        resume_training and checkpoint_path
-    ):  # Only load if resume is true AND a path was found
-        try:
-            # Use the agent's own loading method which handles network, optimizer, steps, and config checks
-            # The path prefix should not include the suffix
-            # Infer prefix from the found checkpoint path
-            model_prefix = str(
-                Path(checkpoint_path).parent
-                / Path(checkpoint_path).stem.replace("_rainbow_agent", "")
-            )
-            agent.load_model(model_prefix)
-            # Overwrite start_total_steps with the value loaded by the agent
-            start_total_steps = agent.total_steps
-            logger.info(
-                f"Agent state loaded successfully, continuing from step {start_total_steps}."
-            )
-        except Exception as e:
-            logger.error(
-                f"Error loading agent state using agent.load_model: {e}. Training continues with fresh agent state.",
-                exc_info=True,
-            )
-            start_total_steps = 0  # Reset steps if loading failed
-            start_episode = 0  # Reset episode if loading failed
-            initial_best_score = -np.inf
-            initial_early_stopping_counter = 0
 
     # --- Instantiate Trainer ---
     trainer = RainbowTrainerModule(
@@ -195,7 +202,7 @@ def run_training(config: dict, data_manager: DataManager):
         raise  # Stop if initial env setup fails
 
     logger.info("=============================================")
-    logger.info(f"STARTING RAINBOW TRAINING{' (Resuming)' if resume_training else ''}")
+    logger.info(f"STARTING RAINBOW TRAINING{' (Resuming via flag)' if resume_training_flag else ''}")
     logger.info("=============================================")
 
     # --- Run Training ---
@@ -232,8 +239,16 @@ def main():  # Remove default config_path
         default="config/training_config.yaml",
         help="Path to the configuration YAML file.",
     )
+    # ADD definition for --resume flag
+    parser.add_argument(
+        '--resume',
+        action='store_true', # Makes it a flag, True if present, False otherwise
+        help='Resume training from the latest checkpoint.'
+    )
     args = parser.parse_args()
     config_path = args.config_path
+    # Use the command-line flag directly for resuming
+    resume_training_flag = args.resume 
     # ----------------------- #
 
     # --- Load Configuration --- # Use parsed config_path
@@ -261,6 +276,8 @@ def main():  # Remove default config_path
     # Get run parameters, allowing defaults only where sensible
     mode = run_config.get('mode', 'train') # Default to train is reasonable
     model_dir = run_config.get('model_dir', 'models') # Default model dir is reasonable
+    # REMOVE reliance on config for resume, use flag instead
+    # resume_training = run_config.get('resume', False) 
     eval_model_prefix = run_config.get('eval_model_prefix', f'{model_dir}/rainbow_transformer_best') # Default prefix is reasonable
     skip_evaluation = run_config.get('skip_evaluation', False) # Default to False is reasonable
     data_base_dir = run_config.get('data_base_dir', 'data') # Default base dir is reasonable
@@ -273,7 +290,8 @@ def main():  # Remove default config_path
     os.makedirs(model_dir, exist_ok=True)
 
     if mode == "train":
-        trained_agent, trained_trainer = run_training(config, data_manager)
+        # Pass the resume_training_flag to run_training
+        trained_agent, trained_trainer = run_training(config, data_manager, resume_training_flag)
         assert isinstance(
             trained_agent, RainbowDQNAgent
         ), "run_training did not return a valid agent"

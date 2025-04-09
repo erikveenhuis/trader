@@ -524,12 +524,20 @@ class RainbowTrainerModule:
 
             # Periodic checkpoint saving (if not saved after validation)
             if save_now:
+                # Save trainer state
                 self._save_trainer_checkpoint(
                     episode=episode + 1,
                     total_steps=total_train_steps,
                     is_best=False,
                     validation_score=None # No relevant validation score here
                 )
+                # ADD THIS: Save agent state with a corresponding 'latest' prefix
+                latest_agent_prefix = str(Path(self.model_dir) / "rainbow_transformer_latest")
+                try: 
+                    self.agent.save_model(latest_agent_prefix)
+                    logger.info(f"Latest agent model saved to {latest_agent_prefix}*")
+                except Exception as e:
+                    logger.error(f"Error saving latest agent model: {e}")
 
         # Save final model using prefix
         final_model_prefix = str(Path(self.model_dir) / "rainbow_transformer_final")
