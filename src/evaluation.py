@@ -12,7 +12,7 @@ from .trainer import RainbowTrainerModule
 from .env import TradingEnv
 from .data import DataManager
 from .utils.utils import set_seeds
-from .metrics import PerformanceTracker, calculate_composite_score
+from .metrics import PerformanceTracker, calculate_episode_score
 
 logger = logging.getLogger("Evaluation")
 
@@ -65,6 +65,7 @@ def evaluate_on_test_data(
     agent.set_training_mode(False)
 
     results = []
+    all_episode_metrics = []
     for i, test_file in enumerate(test_files):
         logger.info(f"--- TEST FILE {i+1}/{len(test_files)}: {test_file.name} ---")
         try:
@@ -75,9 +76,9 @@ def evaluate_on_test_data(
                 test_env, TradingEnv
             ), f"Failed to create test env for {test_file.name}"
 
-            reward, eval_metrics = trainer.evaluate_for_validation(
+            reward, eval_metrics, final_info = trainer._run_single_evaluation_episode(
                 test_env
-            )  # Re-use validation evaluation logic
+            )  # Use the renamed method
 
             assert isinstance(
                 reward, (float, np.float32, np.float64)
@@ -95,10 +96,11 @@ def evaluate_on_test_data(
                     "total_return": eval_metrics.get("total_return", 0.0),
                     "sharpe_ratio": eval_metrics.get("sharpe_ratio", np.nan),
                     "max_drawdown": eval_metrics.get("max_drawdown", np.nan),
-                    "win_rate": eval_metrics.get("win_rate", np.nan),
-                    "transaction_costs": eval_metrics.get("transaction_costs", 0.0),
+                    "transaction_costs": final_info.get("transaction_cost", 0.0),
+                    "action_counts": eval_metrics.get("action_counts", {}),
                 }
             )
+            all_episode_metrics.append(eval_metrics)
             test_env.close()
         except Exception as e:
             logger.error(
@@ -114,50 +116,83 @@ def evaluate_on_test_data(
                     "total_return": 0,
                     "sharpe_ratio": np.nan,
                     "max_drawdown": np.nan,
-                    "win_rate": np.nan,
                     "transaction_costs": 0,
+                    "action_counts": {},
                 }
             )
+
+    # --- Calculate Episode Scores and Average ---
+    test_episode_scores = []
+    if all_episode_metrics:
+        for i, metrics_dict in enumerate(all_episode_metrics):
+            try:
+                score = calculate_episode_score(metrics_dict)
+                assert 0.0 <= score <= 1.0, f"Test episode score out of range [0,1]: {score}"
+                test_episode_scores.append(score)
+                results[i]['episode_score'] = score
+            except Exception as score_e:
+                logger.error(f"Error calculating episode score for test file {results[i]['file']}: {score_e}")
+                test_episode_scores.append(0.0)
+                results[i]['episode_score'] = 0.0
+
+    avg_test_episode_score = float(np.mean(test_episode_scores)) if test_episode_scores else 0.0
+    # --- END SCORE CALCULATION ---
 
     # --- Log Evaluation Summary ---
     successful_results = [r for r in results if r["reward"] > -np.inf]
     if successful_results:
+        portfolio_values = [r["portfolio_value"] for r in successful_results]
+        rewards = [r["reward"] for r in successful_results]
+        returns = [r["total_return"] for r in successful_results]
+        tx_costs = [r["transaction_costs"] for r in successful_results]
+
         metrics_summary = {
-            "avg_reward": np.mean([r["reward"] for r in successful_results]),
-            "avg_portfolio": np.mean(
-                [r["portfolio_value"] for r in successful_results]
-            ),
-            "avg_return": np.mean([r["total_return"] for r in successful_results]),
+            # Reward Stats
+            "min_reward": np.min(rewards),
+            "avg_reward": np.mean(rewards),
+            "max_reward": np.max(rewards),
+            # Portfolio Stats
+            "min_portfolio": np.min(portfolio_values),
+            "avg_portfolio": np.mean(portfolio_values),
+            "max_portfolio": np.max(portfolio_values),
+            # Return Stats
+            "min_return": np.min(returns),
+            "avg_return": np.mean(returns),
+            "max_return": np.max(returns),
+            # Other Averages
             "avg_sharpe": np.nanmean(
                 [r.get("sharpe_ratio", np.nan) for r in successful_results]
             ),  # Use nanmean
             "avg_drawdown": np.nanmean(
                 [r.get("max_drawdown", np.nan) for r in successful_results]
             ),  # Use nanmean
-            "avg_win_rate": np.nanmean(
-                [r.get("win_rate", np.nan) for r in successful_results]
-            ),  # Use nanmean
-            "avg_transaction_costs": np.mean(
-                [r.get("transaction_costs", 0.0) for r in successful_results]
-            ),
+            # Transaction Cost Stats
+            "min_transaction_costs": np.min(tx_costs),
+            "avg_transaction_costs": np.mean(tx_costs),
+            "max_transaction_costs": np.max(tx_costs),
+            # --- ADDED: Average Test Episode Score ---
+            "avg_test_episode_score": avg_test_episode_score,
+            # --- END ADDED ---
         }
         logger.info("=============================================")
         logger.info(
             f"TEST EVALUATION SUMMARY (RAINBOW) ({len(successful_results)}/{len(test_files)} files successful)"
         )
-        logger.info(f"Average Reward: {metrics_summary['avg_reward']:.2f}")
-        logger.info(f"Average Final Portfolio: ${metrics_summary['avg_portfolio']:.2f}")
-        logger.info(f"Average Return: {metrics_summary['avg_return']:.2f}%")
+        # Log Min/Avg/Max for Reward, Portfolio, Return, TxCost
+        logger.info(f"Total Reward (Min/Avg/Max): {metrics_summary['min_reward']:.2f} / {metrics_summary['avg_reward']:.2f} / {metrics_summary['max_reward']:.2f}")
+        logger.info(f"Final Portfolio (Min/Avg/Max): ${metrics_summary['min_portfolio']:.2f} / ${metrics_summary['avg_portfolio']:.2f} / ${metrics_summary['max_portfolio']:.2f}")
+        logger.info(f"Total Return % (Min/Avg/Max): {metrics_summary['min_return']:.2f}% / {metrics_summary['avg_return']:.2f}% / {metrics_summary['max_return']:.2f}%")
+        logger.info(f"Transaction Costs (Min/Avg/Max): ${metrics_summary['min_transaction_costs']:.2f} / ${metrics_summary['avg_transaction_costs']:.2f} / ${metrics_summary['max_transaction_costs']:.2f}")
+        # Log other averages
         logger.info(f"Average Sharpe Ratio: {metrics_summary['avg_sharpe']:.4f}")
         logger.info(f"Average Max Drawdown: {metrics_summary['avg_drawdown']*100:.2f}%")
-        logger.info(f"Average Win Rate: {metrics_summary['avg_win_rate']*100:.2f}%")
-        logger.info(
-            f"Average Transaction Costs: ${metrics_summary['avg_transaction_costs']:.2f}"
-        )
+        # --- ADDED: Log Average Test Score ---
+        logger.info(f"Average Episode Score: {metrics_summary['avg_test_episode_score']:.4f}")
+        # --- END ADDED ---
         logger.info("=============================================")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        results_file = Path(model_dir) / f"test_results_rainbow_{timestamp}.json"
+        results_file = Path(model_dir) / f"test_results_rainbow_score_{avg_test_episode_score:.4f}_{timestamp}.json"
 
         def convert_numpy_types(obj):
             if isinstance(obj, np.integer):
@@ -198,7 +233,6 @@ def evaluate_on_test_data(
             logger.info(f"    Return: {r['total_return']:.2f}%")
             logger.info(f"    Sharpe: {r.get('sharpe_ratio', 'N/A'):.4f}")
             logger.info(f"    Max Drawdown: {r.get('max_drawdown', 'N/A')*100:.2f}%")
-            logger.info(f"    Win Rate: {r.get('win_rate', 'N/A')*100:.2f}%")
             logger.info(f"    Action Counts: {r.get('action_counts', 'N/A')}")
             logger.info(
                 f"    Transaction Costs: ${r.get('transaction_costs', 'N/A'):.2f}"

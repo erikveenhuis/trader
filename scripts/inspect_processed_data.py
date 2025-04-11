@@ -24,7 +24,7 @@ def main():
     # Check if we have any files
     if not train_files and not val_files and not test_files:
         print("\nNo files found in the processed data directory.")
-        print("Please ensure there are CSV files in the 3-ProcessedData directory.")
+        print("Please ensure there are CSV files in the data/train, data/val, and data/test directories.")
         return
 
     # Print some example files from each split

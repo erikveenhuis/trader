@@ -67,6 +67,8 @@ class TestTradingEnvInitializationErrors:
                 window_size=self.window_size,
                 initial_balance=self.initial_balance,
                 transaction_fee=self.transaction_fee,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
             )
 
     def test_missing_column(self):
@@ -87,6 +89,8 @@ class TestTradingEnvInitializationErrors:
                 window_size=self.window_size,
                 initial_balance=self.initial_balance,
                 transaction_fee=self.transaction_fee,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
             )
 
     def test_non_numeric_data(self):
@@ -106,6 +110,8 @@ class TestTradingEnvInitializationErrors:
                 window_size=self.window_size,
                 initial_balance=self.initial_balance,
                 transaction_fee=self.transaction_fee,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
             )
         assert "Column 'close' must be numeric." in str(cm.value)
 
@@ -129,6 +135,8 @@ class TestTradingEnvInitializationErrors:
                 window_size=self.window_size,
                 initial_balance=self.initial_balance,
                 transaction_fee=self.transaction_fee,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
             )
 
     def test_invalid_window_size(self):
@@ -146,13 +154,20 @@ class TestTradingEnvInitializationErrors:
         with pytest.raises(
             AssertionError, match=r"window_size must be an integer >= 1"
         ):
-            TradingEnv(data_path=mock_path, window_size=0)
+            TradingEnv(
+                data_path=mock_path,
+                window_size=0,
+                initial_balance=self.initial_balance,
+                transaction_fee=self.transaction_fee,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
+            )
         with pytest.raises(
             AssertionError, match=r"window_size must be an integer >= 1"
         ):
-            TradingEnv(data_path=mock_path, window_size=-1)
+            TradingEnv(data_path=mock_path, window_size=-1, initial_balance=self.initial_balance, transaction_fee=self.transaction_fee, reward_pnl_scale=1.0, reward_cost_scale=0.5)
         with pytest.raises(AssertionError):  # Non-integer
-            TradingEnv(data_path=mock_path, window_size=5.5)
+            TradingEnv(data_path=mock_path, window_size=5.5, initial_balance=self.initial_balance, transaction_fee=self.transaction_fee, reward_pnl_scale=1.0, reward_cost_scale=0.5)
 
     def test_invalid_initial_balance(self):
         """Test initializing with invalid initial_balance."""
@@ -169,7 +184,14 @@ class TestTradingEnvInitializationErrors:
         with pytest.raises(
             AssertionError, match=r"initial_balance must be a non-negative number"
         ):
-            TradingEnv(data_path=mock_path, window_size=5, initial_balance=-100)
+            TradingEnv(
+                data_path=mock_path,
+                window_size=5,
+                initial_balance=-100,
+                transaction_fee=self.transaction_fee,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
+            )
 
     def test_invalid_transaction_fee(self):
         """Test initializing with invalid transaction_fee."""
@@ -186,10 +208,22 @@ class TestTradingEnvInitializationErrors:
         with pytest.raises(
             AssertionError, match=r"transaction_fee must be a number between 0.*and 1"
         ):
-            TradingEnv(data_path=mock_path, window_size=5, transaction_fee=-0.001)
+            TradingEnv(
+                data_path=mock_path,
+                window_size=5,
+                transaction_fee=-0.001,
+                initial_balance=self.initial_balance,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
+            )
         with pytest.raises(
             AssertionError, match=r"transaction_fee must be a number between 0.*and 1"
         ):
             TradingEnv(
-                data_path=mock_path, window_size=5, transaction_fee=1.0
+                data_path=mock_path,
+                window_size=5,
+                transaction_fee=1.0,
+                initial_balance=self.initial_balance,
+                reward_pnl_scale=1.0,
+                reward_cost_scale=0.5,
             )  # Fee must be < 1

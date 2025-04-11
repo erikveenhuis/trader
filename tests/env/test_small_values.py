@@ -73,6 +73,8 @@ class TestTradingEnvSmallValues:
             window_size=self.window_size,
             initial_balance=self.initial_balance,
             transaction_fee=self.transaction_fee,
+            reward_pnl_scale=1.0,
+            reward_cost_scale=0.5,
         )
         # print(f"[Setup Small Values] data_len={self.env.data_len}, original_len={len(data_dict['close'])}")
 

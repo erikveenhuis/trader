@@ -8,7 +8,7 @@ from .agent import RainbowDQNAgent  # Use relative import
 from .data import DataManager  # Use relative import
 from .metrics import (
     PerformanceTracker,
-    calculate_composite_score,
+    calculate_episode_score,
 )  # Use relative import
 from collections import deque  # Keep deque for performance_tracker
 from typing import List, Tuple  # Added Tuple back
@@ -48,7 +48,7 @@ class RainbowTrainerModule:
         self.run_config = config.get("run", {})
         self.best_validation_metric = -np.inf
         # Adjust path prefix for Rainbow models
-        self.best_model_path_prefix = str(
+        self.best_model_base_prefix = str(
             Path(self.run_config.get("model_dir", "models"))
             / "rainbow_transformer_best"
         )
@@ -57,9 +57,10 @@ class RainbowTrainerModule:
             Path(self.run_config.get("model_dir", "models"))
             / "checkpoint_trainer_latest.pt"
         )
-        self.best_trainer_checkpoint_path = str(
+        # Store the BASE prefix for the best checkpoint.
+        self.best_trainer_checkpoint_base_path = str(
             Path(self.run_config.get("model_dir", "models"))
-            / "checkpoint_trainer_best.pt"
+            / "checkpoint_trainer_best"
         )
         self.validation_metrics = []
         self.performance_tracker = PerformanceTracker()
@@ -82,18 +83,10 @@ class RainbowTrainerModule:
 
     def should_stop_early(self, validation_metrics: List[dict]) -> bool:
         """Check if training should stop early based on validation performance."""
-        if not validation_metrics:
-            return False
-
-        current_score = calculate_composite_score(validation_metrics)
-
-        if current_score > self.best_validation_metric:
-            self.best_validation_metric = current_score
-            self.early_stopping_counter = 0
-            return False
-        else:
-            self.early_stopping_counter += 1
-            return self.early_stopping_counter >= self.early_stopping_patience
+        # Early stopping logic now happens directly in the validate() method
+        # based on validation_score compared to self.best_validation_metric.
+        # This function is no longer used for the primary check.
+        return self.early_stopping_counter >= self.early_stopping_patience
 
     def should_validate(self, episode: int, recent_performance: dict) -> bool:
         """Determine if validation should be performed based on validation frequency."""
@@ -164,18 +157,30 @@ class RainbowTrainerModule:
 
         # Save the best checkpoint if this is the best model so far
         if is_best:
+            # Construct the filename with the score if available
+            if validation_score is not None:
+                best_checkpoint_path = f"{self.best_trainer_checkpoint_base_path}_score_{validation_score:.4f}.pt"
+            else:
+                # Fallback if score isn't passed (shouldn't happen for best)
+                best_checkpoint_path = f"{self.best_trainer_checkpoint_base_path}.pt"
             try:
-                torch.save(checkpoint, self.best_trainer_checkpoint_path)
+                # Use the dynamically constructed path
+                torch.save(checkpoint, best_checkpoint_path)
                 logger.info(
-                    f"Best checkpoint saved to {self.best_trainer_checkpoint_path}"
+                    f"Best checkpoint saved to {best_checkpoint_path}"
                 )
                 # Log the actual score achieved that triggered this save
                 if validation_score is not None:
-                    logger.info(f"  Validation Score Triggered: {validation_score:.4f}")
+                    self.best_validation_metric = validation_score
+                    # --- MODIFIED: Construct filename with score --- 
+                    best_model_save_prefix = f"{self.best_model_base_prefix}_score_{validation_score:.4f}"
+                    self.agent.save_model(best_model_save_prefix)
+                    # --- END MODIFICATION ---
+                    logger.info("  >>> NEW BEST MODEL SAVED <<<")
+                    logger.info(f"  Score: {validation_score:.4f}")
+                    logger.info(f"  Saved to: {best_model_save_prefix}*")
                 else:
-                    logger.info(f"  New Best Validation Score: {self.best_validation_metric:.4f}") # Fallback log
-                logger.info(f"  Episode: {episode}")
-                logger.info(f"  Total Steps: {total_steps}")
+                    logger.info("  No improvement over previous best model")
             except Exception as e:
                 logger.error(f"Error saving best checkpoint: {e}")
 
@@ -246,21 +251,26 @@ class RainbowTrainerModule:
 
         # Modify episode loop to start from loaded episode
         for episode in range(start_episode, num_episodes):
-            logger.info(f"--- Starting Episode {episode + 1}/{num_episodes} ---")
-            # --- REMOVED file path logic ---
-            # The provided 'env' argument should be used directly.
-            # Ensure the passed env supports reset() for multiple episodes.
-
-            # --- REMOVED internal env creation ---
-            # try:
-            #      env = TradingEnv(...)
-            # except ...
-
-            # Call reset *on the provided env*
+            # logger.info(f"--- Starting Episode {episode + 1}/{num_episodes} ---") # Moved log
+            
+            # --- Select File and Log --- #
             try:
-                obs, _ = env.reset()  # Use the provided env instance
+                episode_file_path = Path(specific_file) if specific_file else self.data_manager.get_random_training_file()
+                logger.info(f"--- Starting Episode {episode + 1}/{num_episodes} using file: {episode_file_path.name} ---")
+            except Exception as e:
+                logger.error(f"Error getting data file for episode {episode+1}: {e}")
+                continue # Skip episode if file cannot be obtained
+                
+            # --- Create Env and Reset --- #
+            try:
+                # Ensure reward scaling parameters are passed from env_config
+                env = TradingEnv( # Creates a NEW env for the episode
+                     data_path=str(episode_file_path),
+                     **self.env_config
+                )
+                obs, info = env.reset()
                 assert isinstance(
-                    _["portfolio_value"], (float, np.float32, np.float64)
+                    info["portfolio_value"], (float, np.float32, np.float64)
                 ), "Reset info missing valid portfolio_value"
                 # --- Assert observation structure (Moved Here) ---
                 assert isinstance(
@@ -276,12 +286,12 @@ class RainbowTrainerModule:
                     obs["account_state"], np.ndarray
                 ), "Account state is not a numpy array"
                 # --- End Assert ---
-            except Exception:
+            except Exception as e:
                 logger.error(
-                    f"!!! Exception during env.reset() for {env.data_path} !!!",
+                    f"!!! Exception during env creation/reset() for {episode_file_path.name} !!!",
                     exc_info=True,
                 )
-                continue  # Skip episode if reset fails
+                continue  # Skip episode if env creation/reset fails
 
             done = False
             episode_reward = 0
@@ -290,9 +300,7 @@ class RainbowTrainerModule:
 
             # Reset performance tracker AFTER successful reset and store initial value
             self.performance_tracker = PerformanceTracker()
-            initial_portfolio_value = _[
-                "portfolio_value"
-            ]  # Get initial value from reset info
+            initial_portfolio_value = info["portfolio_value"]
             self.performance_tracker.add_initial_value(initial_portfolio_value)
 
             # Initialize deque to store recent step rewards for logging
@@ -372,7 +380,7 @@ class RainbowTrainerModule:
                     portfolio_value=info["portfolio_value"],
                     action=action,
                     reward=reward,
-                    transaction_cost=info.get("transaction_cost", 0),
+                    transaction_cost=info.get("step_transaction_cost", 0.0),
                 )
 
                 # Store reward for step logging
@@ -437,13 +445,14 @@ class RainbowTrainerModule:
                     logger.info(
                         f"  Ep {episode+1} Step {steps}: Port=${metrics['portfolio_value']:.2f}, "
                         f"Act={action:.0f}, StepRew={current_step_reward:.8f}, "
+                        f"CumTxCost=${sum(self.performance_tracker.transaction_costs):.2f}, "
                         f"MeanRew-{self.log_freq}={mean_recent_reward:.4f}, "
-                        f"MeanLoss-{self.log_freq}={mean_recent_loss:.4f}, " # Add Mean Loss
-                        f"Price=${info.get('price', 0):.8f}, TxCost=${info.get('transaction_cost', 0):.2f}, "
+                        f"MeanLoss-{self.log_freq}={mean_recent_loss:.4f}, "
+                        f"Price=${info.get('price', 0):.8f}, "
                         f"Balance=${info.get('balance', 0.0):.2f}, Position={info.get('position', 0.0):.4f}"
                     )
                     # --- DEBUG: Verify logged TxCost --- 
-                    # print(f"[DEBUG Trainer Log] Step: {steps}, info['transaction_cost']={info.get('transaction_cost', 'N/A'):.4f}")
+                    # print(f"[DEBUG Trainer Log] Step: {steps}, info['step_transaction_cost']={info.get('step_transaction_cost', 'N/A'):.4f}")
                     # --- END DEBUG ---
                     # Clear recent losses after logging average
                     # recent_losses.clear() # Decide if clearing is desired or rolling window is better
@@ -471,7 +480,7 @@ class RainbowTrainerModule:
                 f"Ep {episode+1}: Reward={episode_reward:.2f}, Mean-{current_window_size}={recent_avg_reward:.2f}, "
                 f"Loss={avg_loss:.4f}, "
                 f"Portfolio=${metrics['portfolio_value']:.2f} ({metrics['total_return']:.2f}%), "
-                f"Sharpe={metrics['sharpe_ratio']:.4f}, WinRate={metrics['win_rate']*100:.2f}%"
+                f"Sharpe={metrics['sharpe_ratio']:.4f}"
             )
 
             # --- Checkpoint Saving ---
@@ -493,19 +502,19 @@ class RainbowTrainerModule:
                 logger.info(f"  Current Score: {validation_score:.4f}")
                 logger.info(f"  Previous Best: {self.best_validation_metric:.4f}")
                 logger.info(
-                    f"  Difference: {(validation_score - self.best_validation_metric):.4f}"
+                    f"  Score Difference: {validation_score - self.best_validation_metric:.4f}"
                 )
 
                 if validation_score > self.best_validation_metric:
                     is_best = True
                     self.best_validation_metric = validation_score
-                    self.agent.save_model(self.best_model_path_prefix)
+                    self.agent.save_model(self.best_model_base_prefix)
                     logger.info("  >>> NEW BEST MODEL SAVED <<<")
                     logger.info(f"  Score: {validation_score:.4f}")
                     logger.info(
                         f"  Improvement: {(validation_score - self.best_validation_metric):.4f}"
                     )
-                    logger.info(f"  Saved to: {self.best_model_path_prefix}*")
+                    logger.info(f"  Saved to: {self.best_model_base_prefix}*")
                 else:
                     logger.info("  No improvement over previous best model")
 
@@ -564,17 +573,17 @@ class RainbowTrainerModule:
                 f"Best validation metric: {best_run['metric']:.4f} (at episode {best_run['episode']})"
             )
             logger.info(
-                f"Best validation model saved to: {self.best_model_path_prefix}*"
+                f"Best validation model saved to: {self.best_model_base_prefix}*"
             )
         elif not val_files:
             logger.info(f"Best average reward during training: {best_train_reward:.2f}")
-            logger.info(f"Best training model saved to: {self.best_model_path_prefix}*")
+            logger.info(f"Best training model saved to: {self.best_model_base_prefix}*")
 
-    def evaluate_for_validation(self, env: TradingEnv) -> Tuple[float, dict]:
-        """Evaluate the agent for validation purposes with comprehensive metrics."""
+    def _run_single_evaluation_episode(self, env: TradingEnv) -> Tuple[float, dict, dict]:
+        """Evaluate the agent for one episode on a given environment instance."""
         assert isinstance(
             env, TradingEnv
-        ), "env must be an instance of TradingEnv for validation"
+        ), "env must be an instance of TradingEnv for evaluation"
         was_training = self.agent.training_mode
         self.agent.set_training_mode(False)
 
@@ -597,11 +606,12 @@ class RainbowTrainerModule:
         except Exception as e:
             logger.error(f"Error resetting validation env: {e}")
             self.agent.set_training_mode(was_training)
-            return -np.inf, {}
+            return -np.inf, {}, {}
 
         done = False
         total_reward = 0
         tracker = PerformanceTracker()
+        final_info = {} # Initialize empty dict for final info
 
         while not done:
             try:
@@ -613,7 +623,7 @@ class RainbowTrainerModule:
                     portfolio_value=info["portfolio_value"],
                     action=action,
                     reward=reward,
-                    transaction_cost=info.get("transaction_cost", 0),
+                    transaction_cost=info.get("step_transaction_cost", 0.0), # Use step cost
                 )
 
                 total_reward += reward
@@ -622,11 +632,18 @@ class RainbowTrainerModule:
                 logger.error(f"Error during validation step: {e}")
                 done = True
                 total_reward -= 10.0  # Use float for subtraction
+                # Ensure info exists even if loop breaks early
+                final_info = info if 'info' in locals() else self._get_fallback_info(obs if 'obs' in locals() else {}, {})
 
+        # Store the last info dict after the loop finishes
+        if 'info' in locals():
+            final_info = info 
+            
         metrics = tracker.get_metrics()
         self.agent.set_training_mode(was_training)
 
-        return total_reward, metrics
+        # Return the final info dict as well
+        return total_reward, metrics, final_info
 
     def validate(self, val_files: List[Path]) -> Tuple[bool, float]:
         """Run validation on validation files, log to validation file, and check for early stopping."""
@@ -640,6 +657,7 @@ class RainbowTrainerModule:
 
         metrics = []
         results = []
+        episode_scores = [] # Store individual episode scores
 
         try:  # Main validation logic wrapped in try
             logger.info("============================================")
@@ -656,10 +674,12 @@ class RainbowTrainerModule:
                 try:
                     env = TradingEnv(
                         data_path=str(val_file),
-                        window_size=self.agent_config["window_size"],
                         **self.env_config,  # Pass initial_balance, transaction_fee etc.
                     )
-                    reward, file_metrics = self.evaluate_for_validation(env)
+                    # ADDED: Debug log before evaluation call
+                    logger.debug(f"Calling evaluate_for_validation for {val_file.name}")
+                    # Unpack the final_info dictionary here
+                    reward, file_metrics, final_info = self._run_single_evaluation_episode(env)
 
                     # Store detailed results - convert numpy types to Python native types
                     result = {
@@ -669,12 +689,23 @@ class RainbowTrainerModule:
                         "total_return": float(file_metrics["total_return"]),
                         "sharpe_ratio": float(file_metrics["sharpe_ratio"]),
                         "max_drawdown": float(file_metrics["max_drawdown"]),
-                        "win_rate": float(file_metrics["win_rate"]),
-                        "transaction_costs": float(file_metrics["transaction_costs"]),
+                        # Use final_info for total transaction cost
+                        "transaction_costs": float(final_info.get("transaction_cost", 0.0))
                     }
                     results.append(result)
                     metrics.append(file_metrics)
                     env.close()
+
+                    # --- ADDED: Calculate and store episode score --- #
+                    try:
+                        episode_score = calculate_episode_score(file_metrics)
+                        assert 0.0 <= episode_score <= 1.0, f"Episode score out of range [0,1]: {episode_score}"
+                        episode_scores.append(episode_score)
+                        logger.info(f"    Episode Score: {episode_score:.4f}")
+                    except Exception as score_e:
+                        logger.error(f"Error calculating episode score for {val_file.name}: {score_e}")
+                        episode_scores.append(0.0) # Penalize score calculation errors
+                    # --- END ADDED --- #
 
                     # Enhanced per-file logging
                     logger.info(f"  Results for {val_file.name}:")
@@ -687,7 +718,6 @@ class RainbowTrainerModule:
                     )
                     logger.info(f"    Sharpe Ratio: {file_metrics['sharpe_ratio']:.4f}")
                     logger.info(f"    Max Drawdown: {file_metrics['max_drawdown']*100:.2f}%")
-                    logger.info(f"    Win Rate: {file_metrics['win_rate']*100:.2f}%")
                     logger.info(f"    Action Counts: {file_metrics.get('action_counts', {})}")
                     logger.info(
                         f"    Transaction Costs: ${file_metrics['transaction_costs']:.2f}"
@@ -706,28 +736,31 @@ class RainbowTrainerModule:
                 "total_return": float(np.mean([m["total_return"] for m in metrics])),
                 "sharpe_ratio": float(np.mean([m["sharpe_ratio"] for m in metrics])),
                 "max_drawdown": float(np.mean([m["max_drawdown"] for m in metrics])),
-                "win_rate": float(np.mean([m["win_rate"] for m in metrics])),
                 "transaction_costs": float(
                     np.mean([m["transaction_costs"] for m in metrics])
                 ),
             }
 
-            # Calculate composite score
-            validation_score = calculate_composite_score(avg_metrics)
+            # --- MODIFIED: Use average of episode scores --- #
+            if episode_scores: # Ensure list is not empty
+                 validation_score = float(np.mean(episode_scores))
+            else:
+                 logger.warning("No valid episode scores collected during validation. Defaulting score to -inf.")
+                 validation_score = -np.inf
+            # --- END MODIFICATION --- #
 
             # Log validation summary
             logger.info("\n=== VALIDATION SUMMARY ===")
-            logger.info(f"Composite Score: {validation_score:.4f}")
+            logger.info(f"Average Episode Score: {validation_score:.4f}")
             logger.info(f"Previous Best Score: {self.best_validation_metric:.4f}")
             logger.info(
                 f"Score Difference: {validation_score - self.best_validation_metric:.4f}"
             )
-            logger.info(f"Average Reward: {avg_metrics['avg_reward']:.2f}")
-            logger.info(f"Average Portfolio: ${avg_metrics['portfolio_value']:.2f}")
-            logger.info(f"Average Return: {avg_metrics['total_return']:.2f}%")
-            logger.info(f"Average Sharpe: {avg_metrics['sharpe_ratio']:.4f}")
-            logger.info(f"Average Max Drawdown: {avg_metrics['max_drawdown']*100:.2f}%")
-            logger.info(f"Average Win Rate: {avg_metrics['win_rate']*100:.2f}%")
+            logger.info(f"  Average Reward: {avg_metrics['avg_reward']:.2f}")
+            logger.info(f"  Average Portfolio: ${avg_metrics['portfolio_value']:.2f}")
+            logger.info(f"  Average Return: {avg_metrics['total_return']:.2f}%")
+            logger.info(f"  Average Sharpe: {avg_metrics['sharpe_ratio']:.4f}")
+            logger.info(f"  Average Max Drawdown: {avg_metrics['max_drawdown']*100:.2f}%")
             logger.info(
                 f"Average Transaction Costs: ${avg_metrics['transaction_costs']:.2f}"
             )
@@ -741,10 +774,6 @@ class RainbowTrainerModule:
                     json_results = {
                         "timestamp": timestamp,
                         "validation_score": float(validation_score),
-                        "best_validation_score": float(self.best_validation_metric),
-                        "score_difference": float(
-                            validation_score - self.best_validation_metric
-                        ),
                         "average_metrics": avg_metrics,
                         "detailed_results": results,
                     }
@@ -788,7 +817,7 @@ class RainbowTrainerModule:
             "balance": last_info.get("balance", 0.0),
             "position": last_info.get("position", 0.0),
             "portfolio_value": fallback_portfolio_value,  # Ensure valid value
-            "transaction_cost": last_info.get("transaction_cost", 0.0),
+            "step_transaction_cost": last_info.get("step_transaction_cost", 0.0),
             "error": "Environment step failed",
         }
 

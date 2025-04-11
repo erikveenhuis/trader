@@ -75,6 +75,8 @@ class TestTradingEnvCoreFunctionality(
         window_size=None,
         initial_balance=None,
         transaction_fee=None,
+        reward_pnl_scale=1.0,
+        reward_cost_scale=0.5,
     ):
         """Helper to initialize environment with overrides."""
         dp = data_path if data_path else self.mock_data_path
@@ -82,7 +84,12 @@ class TestTradingEnvCoreFunctionality(
         ib = initial_balance if initial_balance is not None else self.initial_balance
         tf = transaction_fee if transaction_fee is not None else self.transaction_fee
         return TradingEnv(
-            data_path=dp, window_size=ws, initial_balance=ib, transaction_fee=tf
+            data_path=dp,
+            window_size=ws,
+            initial_balance=ib,
+            transaction_fee=tf,
+            reward_pnl_scale=reward_pnl_scale,
+            reward_cost_scale=reward_cost_scale,
         )
 
     def test_initialization(self):

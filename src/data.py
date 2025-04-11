@@ -146,10 +146,13 @@ class DataManager:
     def get_random_training_file(self) -> Path:
         """Get a random training file."""
         self._ensure_organized()
+        num_files = len(self.train_files)
+        logger.debug(f"[DataManager] Choosing random file from {num_files} training files.")
         assert (
-            len(self.train_files) > 0
+            num_files > 0
         ), "Cannot get random file: No training files available."
         random_file = random.choice(self.train_files)
+        logger.debug(f"[DataManager] Selected file: {random_file.name}")
         assert (
             random_file.exists()
         ), f"Chosen random training file does not exist: {random_file}"

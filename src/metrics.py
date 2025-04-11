@@ -58,23 +58,6 @@ def calculate_max_drawdown(portfolio_values: List[float]) -> float:
     return max_dd
 
 
-def calculate_win_rate(returns: List[float]) -> float:
-    """Calculate the win rate (percentage of positive returns)."""
-    assert isinstance(returns, list), "Input returns must be a list"
-    assert all(
-        isinstance(r, (float, np.float32, np.float64)) for r in returns
-    ), "All elements in returns must be floats"
-    if not returns:
-        return 0.0
-
-    positive_returns = sum(1 for r in returns if r > 0)
-    win_rate = positive_returns / len(returns)
-    assert (
-        0.0 <= win_rate <= 1.0
-    ), f"Win rate calculation resulted in value outside [0, 1]: {win_rate}"
-    return win_rate
-
-
 def calculate_avg_trade_return(returns: List[float]) -> float:
     """Calculate the average return per trade."""
     assert isinstance(returns, list), "Input returns must be a list"
@@ -91,25 +74,34 @@ def calculate_avg_trade_return(returns: List[float]) -> float:
     return avg_return
 
 
-def calculate_composite_score(metrics: Dict[str, float]) -> float:
-    """Calculate a composite score from a dictionary of metrics."""
+def calculate_episode_score(metrics: Dict[str, float]) -> float:
+    """
+    Calculate a normalized episode-level score focusing on risk-adjusted return and drawdown.
+
+    Metrics (Sharpe Ratio, Total Return) are normalized using a sigmoid function
+    to map them to the (0, 1) range before weighting.
+    This score is designed for evaluating a single episode (e.g., one backtest run)
+    and excludes metrics like win_rate that focus on intra-episode step performance.
+    """
     assert isinstance(metrics, dict), "Input metrics must be a dictionary"
     if not metrics:
         return 0.0
 
+    # Weights redistributed proportionally after removing win_rate (original total was 0.9)
     weights = {
-        "sharpe_ratio": 0.4,
-        "total_return": 0.3,
-        "win_rate": 0.1,
-        "max_drawdown": 0.2,
+        "sharpe_ratio": 0.4 / 0.9,  # ~0.444
+        "total_return": 0.3 / 0.9,  # ~0.333
+        "max_drawdown": 0.2 / 0.9,  # ~0.222
     }
 
     score = 0.0
     sharpe = metrics.get("sharpe_ratio", 0.0)
+    # Convert total_return from percentage to decimal
     total_return_pct = metrics.get("total_return", 0.0) / 100.0
-    win_rate = metrics.get("win_rate", 0.0)
+    # Default max_drawdown to 1.0 (worst case) if not provided
     max_drawdown = metrics.get("max_drawdown", 1.0)
 
+    # --- Input Assertions ---
     assert (
         isinstance(sharpe, (float, np.float32, np.float64))
         and not np.isnan(sharpe)
@@ -121,21 +113,31 @@ def calculate_composite_score(metrics: Dict[str, float]) -> float:
         and not np.isinf(total_return_pct)
     ), "Invalid Total Return in metrics"
     assert (
-        isinstance(win_rate, (float, np.float32, np.float64)) and 0.0 <= win_rate <= 1.0
-    ), "Invalid Win Rate in metrics"
-    assert (
         isinstance(max_drawdown, (float, np.float32, np.float64))
         and 0.0 <= max_drawdown <= 1.0
     ), "Invalid Max Drawdown in metrics"
 
-    score += sharpe * weights["sharpe_ratio"]
-    score += total_return_pct * weights["total_return"]
-    score += win_rate * weights["win_rate"]
-    score += (1.0 - max_drawdown) * weights["max_drawdown"]
+    # --- Normalization using Sigmoid: 1 / (1 + exp(-x)) ---
+    # Maps values to (0, 1). 0 -> 0.5, positive -> >0.5, negative -> <0.5
+    normalized_sharpe = 1.0 / (1.0 + np.exp(-sharpe))
+    normalized_total_return = 1.0 / (1.0 + np.exp(-total_return_pct))
+    # (1 - max_drawdown) is already effectively normalized in [0, 1]
+    normalized_drawdown_complement = 1.0 - max_drawdown
 
-    assert (
-        isinstance(score, float) and not np.isnan(score) and not np.isinf(score)
-    ), f"Composite score calculation resulted in NaN/Inf: {score}"
+    # --- Weighted sum calculation using normalized values ---
+    score += normalized_sharpe * weights["sharpe_ratio"]
+    score += normalized_total_return * weights["total_return"]
+    score += normalized_drawdown_complement * weights["max_drawdown"]
+
+    # Clamp score to handle potential floating point inaccuracies near 0 or 1
+    score = np.clip(score, 0.0, 1.0)
+
+    # Final score will be between 0 and 1 because inputs are normalized and weights sum to 1
+    # --- Separated Assertions for Debugging --- 
+    assert isinstance(score, (float, np.floating)), f"Score type is not float or np.floating: {type(score)}"
+    assert not np.isnan(score), f"Score calculation resulted in NaN: {score}"
+    assert not np.isinf(score), f"Score calculation resulted in Inf: {score}"
+    assert 0.0 <= score <= 1.0, f"Score calculation out of range [0,1]: {score}"
     return score
 
 
@@ -233,7 +235,6 @@ class PerformanceTracker:
             * 100,
             "sharpe_ratio": calculate_sharpe_ratio(self.returns),
             "max_drawdown": calculate_max_drawdown(self.portfolio_values),
-            "win_rate": calculate_win_rate(self.returns),
             "avg_trade_return": calculate_avg_trade_return(self.returns),
             "transaction_costs": sum(self.transaction_costs) if self.transaction_costs else 0.0,
             "avg_reward": np.mean(self.rewards) if self.rewards else 0.0,
@@ -243,7 +244,6 @@ class PerformanceTracker:
             isinstance(v, (float, np.float32, np.float64, dict)) for v in metrics.values()
         ), "Not all calculated metrics are floats or dict"
         assert 0.0 <= metrics["max_drawdown"] <= 1.0, "Max drawdown out of range [0, 1]"
-        assert 0.0 <= metrics["win_rate"] <= 1.0, "Win rate out of range [0, 1]"
         # Check for NaN/Inf only in numeric values
         assert not any(
             np.isnan(v) or np.isinf(v) 
@@ -282,7 +282,6 @@ class PerformanceTracker:
             "total_return": (recent_portfolio[-1] / recent_portfolio[0] - 1) * 100,
             "sharpe_ratio": calculate_sharpe_ratio(recent_returns),
             "max_drawdown": calculate_max_drawdown(recent_portfolio),
-            "win_rate": calculate_win_rate(recent_returns),
             "avg_trade_return": calculate_avg_trade_return(recent_returns),
             "transaction_costs": sum(recent_costs) if recent_costs else 0.0,
             "avg_reward": np.mean(recent_rewards),
@@ -293,7 +292,6 @@ class PerformanceTracker:
         assert (
             0.0 <= metrics["max_drawdown"] <= 1.0
         ), "Recent max drawdown out of range [0, 1]"
-        assert 0.0 <= metrics["win_rate"] <= 1.0, "Recent win rate out of range [0, 1]"
         assert not any(
             np.isnan(v) or np.isinf(v) for v in metrics.values()
         ), "NaN or Inf found in calculated recent metrics"

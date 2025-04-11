@@ -447,6 +447,8 @@ class TradingEnv(gym.Env):
 
         next_obs = self._get_observation()
         info = self._get_info()
+        # Add the cost incurred in THIS step to the info dict
+        info['step_transaction_cost'] = step_transaction_cost 
         self.portfolio_values.append(info["portfolio_value"])
 
         if done:
@@ -493,7 +495,7 @@ class TradingEnv(gym.Env):
 # Example usage
 if __name__ == "__main__":
     env = TradingEnv(
-        data_path="3-ProcessedData/train/2018-12-06_ETH-USD.csv",
+        data_path="data/train/2018-12-06_ETH-USD.csv",
         window_size=60,
         initial_balance=10000.0,
         transaction_fee=0.001,

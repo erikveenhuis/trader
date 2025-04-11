@@ -91,6 +91,20 @@ class RainbowDQNAgent:
         self.target_network = RainbowNetwork(config=self.config, device=self.device).to(
             self.device
         )
+        # Wrap models with torch.compile for potential speedup - REMOVED due to MPS backend errors
+        # if int(torch.__version__.split('.')[0]) >= 2:
+        #     logger.info("Applying torch.compile to network and target_network.")
+        #     # Add error handling in case compile fails on specific setups
+        #     try:
+        #         # Try a less aggressive compilation mode first
+        #         self.network = torch.compile(self.network, mode="reduce-overhead")
+        #         self.target_network = torch.compile(self.target_network, mode="reduce-overhead")
+        #         logger.info("torch.compile(mode='reduce-overhead') applied successfully.")
+        #     except Exception as e:
+        #         logger.warning(f"torch.compile failed: {e}. Proceeding without compilation.")
+        # else:
+        #     logger.warning("torch version < 2.0, torch.compile not available.")
+
         self.target_network.load_state_dict(self.network.state_dict())
         self.target_network.eval()  # Target network is not trained directly
 

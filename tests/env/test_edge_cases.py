@@ -69,6 +69,8 @@ class TestTradingEnvEdgeCases(unittest.TestCase):
             window_size=self.window_size,
             initial_balance=self.initial_balance,
             transaction_fee=self.transaction_fee,
+            reward_pnl_scale=1.0,
+            reward_cost_scale=0.5,
         )
         env.reset()
 
@@ -96,6 +98,8 @@ class TestTradingEnvEdgeCases(unittest.TestCase):
             window_size=self.window_size,
             initial_balance=initial_balance,
             transaction_fee=self.transaction_fee,
+            reward_pnl_scale=1.0,
+            reward_cost_scale=0.5,
         )
         env.reset()
 
@@ -132,6 +136,8 @@ class TestTradingEnvEdgeCases(unittest.TestCase):
             window_size=self.window_size,
             initial_balance=self.initial_balance,
             transaction_fee=self.transaction_fee,
+            reward_pnl_scale=1.0,
+            reward_cost_scale=0.5,
         )
         env.reset()
 
