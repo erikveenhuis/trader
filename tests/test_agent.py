@@ -295,13 +295,15 @@ def test_target_network_update(agent, default_config):
 
 
 @pytest.mark.unittest
-def test_save_load_model(agent, default_config):
+def test_save_load_model(agent, default_config, tmp_path):
     """Tests saving and loading the agent's state."""
-    save_dir = "test_agent_save"
-    save_prefix = os.path.join(save_dir, "test_model")
-    # Clean up any previous test runs
-    if os.path.exists(save_dir):
-        shutil.rmtree(save_dir)
+    # Use tmp_path for the save directory
+    save_dir = tmp_path / "agent_save"
+    save_dir.mkdir()
+    save_prefix = str(save_dir / "test_model") # Use str() for conversion if needed
+    # Remove manual cleanup check
+    # if os.path.exists(save_dir):
+    #     shutil.rmtree(save_dir)
 
     # Modify agent state slightly
     agent.total_steps = 123
@@ -359,18 +361,21 @@ def test_save_load_model(agent, default_config):
     # A more thorough check might involve comparing specific tensors within the state,
     # ensuring they are on the correct device after loading.
 
-    # Clean up the saved model directory
-    shutil.rmtree(save_dir)
+    # Clean up the saved model directory - NO LONGER NEEDED
+    # shutil.rmtree(save_dir)
 
 
 # --- Test Configuration Compatibility Check on Load ---
 @pytest.mark.unittest
-def test_load_model_config_mismatch(agent, default_config, mocker, caplog):
+def test_load_model_config_mismatch(agent, default_config, mocker, caplog, tmp_path):
     """Tests loading a model with a mismatched configuration."""
-    save_dir = "test_agent_save_mismatch"
-    save_prefix = os.path.join(save_dir, "test_model_mismatch")
-    if os.path.exists(save_dir):
-        shutil.rmtree(save_dir)
+    # Use tmp_path for the save directory
+    save_dir = tmp_path / "agent_save_mismatch"
+    save_dir.mkdir()
+    save_prefix = str(save_dir / "test_model_mismatch") # Use str() for conversion if needed
+    # Remove manual cleanup check
+    # if os.path.exists(save_dir):
+    #     shutil.rmtree(save_dir)
 
     # Save the current agent
     agent.total_steps = 50
@@ -405,8 +410,8 @@ def test_load_model_config_mismatch(agent, default_config, mocker, caplog):
     # Update: Check that steps are RESET to 0 due to load exception from incompatibility
     assert mismatched_agent.total_steps == 0
 
-    # Clean up
-    shutil.rmtree(save_dir)
+    # Clean up - NO LONGER NEEDED
+    # shutil.rmtree(save_dir)
 
 
 @pytest.mark.unittest

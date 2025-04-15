@@ -737,21 +737,12 @@ class RainbowDQNAgent:
         logger.debug("Target network weights updated.")
 
     def save_model(self, path_prefix):
-        """Saves the agent's state, including network, optimizer, and step count."""
+        """Saves the agent's state to separate files: network, optimizer, and misc config."""
         if self.network is None or self.optimizer is None:
             logger.error(
                 "Attempted to save model, but network or optimizer not initialized."
             )
             return
-
-        state = {
-            "total_steps": self.total_steps,
-            "network_state_dict": self.network.state_dict(),
-            "optimizer_state_dict": self.optimizer.state_dict(),
-            "config": self.config,  # Save config used for this agent
-            # Note: Replay buffer state is usually not saved due to size,
-            # but could be added if needed: 'replay_buffer': self.buffer.state_dict()
-        }
 
         # Ensure directory exists
         directory = os.path.dirname(path_prefix)
@@ -763,136 +754,194 @@ class RainbowDQNAgent:
                 logger.error(
                     f"Could not create directory {directory} for saving model: {e}"
                 )
-                return  # Cannot save if directory creation fails
+                return # Cannot save if directory creation fails
 
-        path = f"{path_prefix}_rainbow_agent.pt"
+        network_path = f"{path_prefix}_network.pth"
+        optimizer_path = f"{path_prefix}_optimizer.pth"
+        misc_path = f"{path_prefix}_misc.yaml"
+
+        # Save network state
         try:
-            torch.save(state, path)
-            logger.info(f"Agent state saved to {path} (Steps: {self.total_steps})")
+            torch.save(self.network.state_dict(), network_path)
+            logger.info(f"Network state saved to {network_path}")
         except Exception as e:
-            logger.error(f"Error saving agent state to {path}: {e}")
+            logger.error(f"Error saving network state to {network_path}: {e}")
+            return # Stop if network saving fails
+
+        # Save optimizer state
+        try:
+            torch.save(self.optimizer.state_dict(), optimizer_path)
+            logger.info(f"Optimizer state saved to {optimizer_path}")
+        except Exception as e:
+            logger.error(f"Error saving optimizer state to {optimizer_path}: {e}")
+            # Optionally decide if failure here prevents saving misc data
+
+        # Save miscellaneous state (total_steps, config)
+        misc_data = {
+            "total_steps": self.total_steps,
+            "config": self.config,
+        }
+        try:
+            with open(misc_path, 'w') as f:
+                yaml.dump(misc_data, f, default_flow_style=False)
+            logger.info(f"Miscellaneous state saved to {misc_path} (Steps: {self.total_steps})")
+        except Exception as e:
+            logger.error(f"Error saving miscellaneous state to {misc_path}: {e}")
 
     def load_model(self, path_prefix):
-        """Loads the agent's state, including network, optimizer, and step count."""
-        start_time = time.time()
-        path = f"{path_prefix}_rainbow_agent.pt"
+        """Loads the agent's state from specified files (network, optimizer, misc)."""
+        # This method loads models saved independently (e.g., final models),
+        # not checkpoints used for resuming training.
+        network_path = f"{path_prefix}_network.pth"
+        optimizer_path = f"{path_prefix}_optimizer.pth"
+        misc_path = f"{path_prefix}_misc.yaml"
 
-        try:
-            if not os.path.exists(path):
-                logger.warning(
-                    f"Checkpoint file not found at {path}. Agent state not loaded. Starting from scratch with initial config."
-                )
-                # Agent is already initialized with config in __init__, just return
-                return
+        loaded_successfully = True
 
-            checkpoint = torch.load(path, map_location=self.device)
+        # Load network state
+        if os.path.exists(network_path):
+            logger.info(f"Loading network state from: {network_path}")
+            try:
+                # Load to CPU first to handle device mismatches
+                state_dict = torch.load(network_path, map_location='cpu')
+                self.network.load_state_dict(state_dict)
+                self.network.to(self.device) # Move to the correct device
+                # Also load into target network initially
+                self.target_network.load_state_dict(self.network.state_dict())
+                self.target_network.to(self.device)
+                self.target_network.eval()
+                logger.info("Network state loaded.")
+            except Exception as e:
+                logger.error(f"Error loading network state: {e}")
+                loaded_successfully = False
+        else:
+            logger.warning(f"Network state file not found: {network_path}")
+            loaded_successfully = False
 
-            # --- Configuration Compatibility Check (Basic) ---
-            saved_config = checkpoint.get("config")
-            if saved_config:
-                mismatched_keys = []
-                # Check essential architectural parameters
-                essential_keys = [
-                    "window_size",
-                    "n_features",
-                    "hidden_dim",
-                    "num_actions",
-                    "num_atoms",
-                    "v_min",
-                    "v_max",
-                    "n_steps",
-                ]
-                for key in essential_keys:
-                    # Use .get() on self.config as well for safety if key somehow missing
-                    if saved_config.get(key) != self.config.get(key):
-                        mismatched_keys.append(
-                            f"{key} (Saved: {saved_config.get(key)}, Current: {self.config.get(key)})"
-                        )
-
-                if mismatched_keys:
-                    logger.warning(
-                        "Configuration mismatch detected between saved model and current agent config:"
-                    )
-                    for mismatch in mismatched_keys:
-                        logger.warning(f"  - {mismatch}")
-                    logger.warning(
-                        "Loading weights anyway, but results may be unpredictable due to architecture/hyperparameter changes."
-                    )
-                else:
-                    logger.info(
-                        "Saved model configuration is compatible with current agent configuration."
-                    )
-            else:
-                logger.warning(
-                    "Saved model checkpoint does not contain configuration information. Cannot check compatibility."
-                )
-            # ------------------------------------
-
-            # Load network weights
-            self.network.load_state_dict(checkpoint["network_state_dict"])
-            self._update_target_network()  # Sync target network
-            logger.info("Network weights loaded.")
-
-            # Load optimizer state
-            if "optimizer_state_dict" in checkpoint:
-                self.optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-                # Move optimizer state to the correct device
+        # Load optimizer state
+        if os.path.exists(optimizer_path):
+            logger.info(f"Loading optimizer state from: {optimizer_path}")
+            try:
+                # Load to CPU first
+                state_dict = torch.load(optimizer_path, map_location='cpu')
+                self.optimizer.load_state_dict(state_dict)
+                # Move optimizer states to the correct device
                 for state in self.optimizer.state.values():
                     for k, v in state.items():
                         if isinstance(v, torch.Tensor):
                             state[k] = v.to(self.device)
                 logger.info("Optimizer state loaded.")
+            except Exception as e:
+                logger.error(f"Error loading optimizer state: {e}")
+                loaded_successfully = False
+        else:
+            logger.warning(f"Optimizer state file not found: {optimizer_path}")
+            loaded_successfully = False
+
+        # Load miscellaneous state (total_steps, potentially config)
+        if os.path.exists(misc_path):
+            logger.info(f"Loading miscellaneous state from: {misc_path}")
+            try:
+                with open(misc_path, 'r') as f:
+                    misc_data = yaml.safe_load(f)
+                # Load total_steps for standalone model loading
+                if 'total_steps' in misc_data:
+                    self.total_steps = misc_data['total_steps']
+                    logger.info(f"Miscellaneous data loaded (total_steps applied: {self.total_steps}).")
+                else:
+                    logger.warning("Miscellaneous data loaded but 'total_steps' not found.")
+
+                # Check for config compatibility
+                if 'config' in misc_data:
+                    if misc_data['config'] != self.config:
+                        logger.warning("Configuration mismatch detected: Loaded model config differs from current agent config.")
+                else:
+                    logger.warning("Miscellaneous data loaded but 'config' key not found for comparison.")
+
+            except Exception as e:
+                logger.error(f"Error loading miscellaneous state: {e}")
+                loaded_successfully = False
+        else:
+            logger.warning(f"Miscellaneous state file not found: {misc_path}")
+            loaded_successfully = False
+
+        if loaded_successfully:
+            logger.info(f"Model loaded from prefix {path_prefix}")
+        else:
+            logger.warning(f"Model loading from prefix {path_prefix} encountered issues.")
+        return loaded_successfully
+
+    # --- NEW METHOD for loading state from unified checkpoint ---
+    def load_state(self, agent_state_dict: dict):
+        """Loads the agent's state from a dictionary (typically from a unified checkpoint)."""
+        logger.info("Loading agent state from dictionary...")
+        loaded_successfully = True
+        try:
+            # Load Network State
+            if 'network_state_dict' in agent_state_dict:
+                self.network.load_state_dict(agent_state_dict['network_state_dict'])
+                self.network.to(self.device)
+                logger.info("Network state loaded from dict.")
             else:
-                logger.warning(
-                    "Optimizer state not found in checkpoint. Optimizer will start from scratch."
-                )
+                logger.warning("Agent state dict missing 'network_state_dict'.")
+                loaded_successfully = False
 
-            # Load total steps
-            if "total_steps" in checkpoint:
-                self.total_steps = checkpoint["total_steps"]
-                logger.info(f"Total steps loaded: {self.total_steps}")
-                # Potentially re-initialize PER beta annealing based on loaded steps
-                self.buffer.update_beta(self.total_steps)
-                logger.info(
-                    f"PER beta recalculated based on loaded steps: {self.buffer.beta:.4f}"
-                )
+            # Load Target Network State
+            if 'target_network_state_dict' in agent_state_dict:
+                self.target_network.load_state_dict(agent_state_dict['target_network_state_dict'])
+                self.target_network.to(self.device)
+                self.target_network.eval()
+                logger.info("Target network state loaded from dict.")
             else:
-                logger.warning(
-                    "Total steps not found in checkpoint. Step count reset to 0."
-                )
-                self.total_steps = 0
+                logger.warning("Agent state dict missing 'target_network_state_dict'.")
+                loaded_successfully = False
 
-            # Set network modes correctly after loading
-            self.set_training_mode(self.training_mode)  # Re-apply current training mode
+            # Load Optimizer State
+            if 'optimizer_state_dict' in agent_state_dict:
+                self.optimizer.load_state_dict(agent_state_dict['optimizer_state_dict'])
+                # Move optimizer states to the correct device
+                for state in self.optimizer.state.values():
+                    for k, v in state.items():
+                        if isinstance(v, torch.Tensor):
+                            state[k] = v.to(self.device)
+                logger.info("Optimizer state loaded from dict.")
+            else:
+                logger.warning("Agent state dict missing 'optimizer_state_dict'.")
+                loaded_successfully = False
 
-            load_time = time.time() - start_time
-            logger.info(
-                f"Agent state loaded successfully from {path} in {load_time:.4f} seconds"
-            )
+            # Load Total Steps
+            if 'agent_total_steps' in agent_state_dict:
+                self.total_steps = agent_state_dict['agent_total_steps']
+                logger.info(f"Agent total_steps loaded from dict: {self.total_steps}")
+            else:
+                logger.warning("Agent state dict missing 'agent_total_steps'.")
+                # Decide if this is critical - maybe allow loading without it?
+                # loaded_successfully = False
 
-        except FileNotFoundError:
-            # This case is handled by the os.path.exists check above
-            pass  # Already logged warning
-        except KeyError as e:
-            logger.error(
-                f"Error loading agent state from {path}: Missing key {e}. Checkpoint might be corrupted or incompatible. Agent continues from scratch.",
-                exc_info=True,
-            )
-            # Reset steps if loading failed partially or due to incompatible keys
-            self.total_steps = 0
-            # Ensure optimizer state is also reset if partial load failed
-            self.optimizer = optim.Adam(self.network.parameters(), lr=self.lr)
+            # Optional: Could also load/verify config here if needed
+            if 'agent_config' in agent_state_dict:
+                if agent_state_dict['agent_config'] != self.config:
+                    logger.warning("Config from loaded agent state dict differs from current agent config.")
+                else:
+                    logger.info("Agent config from dict matches current config.")
+            else:
+                logger.warning("Agent state dict missing 'agent_config'.")
+                # loaded_successfully = False # Optional: make config matching mandatory
+
         except Exception as e:
-            logger.error(
-                f"Error loading agent state from {path}: {e}. Agent continues from scratch.",
-                exc_info=True,
-            )
-            # Reset steps and optimizer if loading failed
-            self.total_steps = 0
-            self.optimizer = optim.Adam(self.network.parameters(), lr=self.lr)
+            logger.error(f"Error loading agent state from dictionary: {e}", exc_info=True)
+            loaded_successfully = False
+
+        if loaded_successfully:
+            logger.info("Agent state successfully loaded from dictionary.")
+        else:
+            logger.error("Failed to load agent state completely from dictionary.")
+
+        return loaded_successfully
+    # --- END NEW METHOD ---
 
     def set_training_mode(self, training=True):
-        """Sets the training mode for the agent and network."""
+        """Sets the agent and network to training or evaluation mode."""
         self.training_mode = training
         mode = "TRAINING" if training else "EVALUATION"
         logger.info(f"Set agent to {mode} mode")

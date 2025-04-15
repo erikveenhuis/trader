@@ -21,6 +21,7 @@ except ImportError as e:
     print(f"Failed to import required modules: {e}")
     print(f"Current sys.path: {sys.path}")
     pytest.skip("Skipping metrics tests due to import error.", allow_module_level=True)
+    # raise e # Re-raise the exception to see the full traceback
 
 # --- Test Individual Metric Functions ---
 

@@ -32,4 +32,4 @@ ignore = ["E501"] # Ignore line length errors globally
 
 # You can also configure other tools like black here if desired
 [tool.black]
-line-length = 88
+line-length = 128

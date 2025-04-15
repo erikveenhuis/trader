@@ -53,6 +53,10 @@ def load_checkpoint(checkpoint_path: str) -> Optional[Dict[str, Any]]:
             "network_state_dict",
             "optimizer_state_dict",
             "best_validation_metric",
+            "target_network_state_dict",
+            "agent_total_steps",
+            "early_stopping_counter",
+            "agent_config",
         ]
         if not all(key in checkpoint for key in required_keys):
             logger.error(

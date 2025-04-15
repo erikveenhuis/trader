@@ -249,6 +249,65 @@ class PrioritizedReplayBuffer:
             batch_max_prio = np.max(new_priorities)
             self.max_priority = max(self.max_priority, batch_max_prio)
 
+    def state_dict(self):
+        """Returns the state of the buffer for saving."""
+        return {
+            'buffer': list(self.buffer), # Convert deque to list for saving
+            'tree_state': {
+                'tree': self.tree.tree,
+                'data_indices': self.tree.data_indices,
+                'write': self.tree.write,
+                'size': self.tree.size,
+            },
+            'buffer_write_idx': self.buffer_write_idx,
+            'max_priority': self.max_priority,
+            'alpha': self.alpha,
+            'beta': self.beta,
+            'beta_start': self.beta_start,
+            'beta_frames': self.beta_frames,
+            'epsilon': self.epsilon,
+            'capacity': self.capacity
+        }
+
+    def load_state_dict(self, state_dict):
+        """Loads the buffer state from a state dictionary."""
+        # Basic validation
+        required_keys = ['buffer', 'tree_state', 'buffer_write_idx', 'max_priority',
+                         'alpha', 'beta', 'beta_start', 'beta_frames', 'epsilon', 'capacity']
+        for key in required_keys:
+            if key not in state_dict:
+                raise ValueError(f"Missing key in buffer state_dict: {key}")
+        if state_dict['capacity'] != self.capacity:
+            # Maybe allow resizing later, but for now require capacity match
+            raise ValueError(f"Capacity mismatch: state_dict has {state_dict['capacity']}, buffer has {self.capacity}")
+        tree_state = state_dict['tree_state']
+        required_tree_keys = ['tree', 'data_indices', 'write', 'size']
+        for key in required_tree_keys:
+            if key not in tree_state:
+                raise ValueError(f"Missing key in buffer tree_state: {key}")
+
+        # Restore buffer deque from list
+        self.buffer = deque(state_dict['buffer'], maxlen=self.capacity)
+
+        # Restore SumTree state
+        self.tree.tree = tree_state['tree']
+        self.tree.data_indices = tree_state['data_indices']
+        self.tree.write = tree_state['write']
+        self.tree.size = tree_state['size']
+
+        # Restore other attributes
+        self.buffer_write_idx = state_dict['buffer_write_idx']
+        self.max_priority = state_dict['max_priority']
+        self.alpha = state_dict['alpha']
+        self.beta = state_dict['beta']
+        self.beta_start = state_dict['beta_start']
+        self.beta_frames = state_dict['beta_frames']
+        self.epsilon = state_dict['epsilon']
+        # self.capacity is checked above
+
+        # Sanity check after loading
+        assert len(self.buffer) == self.tree.size, "Buffer deque length doesn't match SumTree size after load"
+
     def __len__(self):
         # Return the current fill size of the buffer/tree
         return self.tree.size

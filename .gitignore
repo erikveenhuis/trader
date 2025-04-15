@@ -8,7 +8,8 @@ models/
 results/
 logs/
 .pytest_cache/
-
+.coverage
 data/
 *.csv
 *.csv.gz
+.ruff_cache/

@@ -152,15 +152,22 @@ class TradingEnv(gym.Env):
 
     def _map_to_original_index(self, internal_index):
         """Helper method to map internal step index to original data index."""
-        if np.isnan(internal_index) or np.isinf(internal_index):
-            raise ValueError(f"Invalid internal_index ({internal_index}).")
+        # Check for NaN/Inf first
+        if not isinstance(internal_index, (int, float)) or np.isnan(internal_index) or np.isinf(internal_index):
+            raise ValueError(f"Invalid internal_index ({internal_index}). Must be a finite number.")
         try:
-            internal_index = int(internal_index)
+            # Attempt conversion to int, let it raise error for non-integers/strings
+            internal_index_int = int(internal_index)
+            # Additional check: ensure the original float wasn't something like 5.5
+            if internal_index != internal_index_int:
+                 raise ValueError # Trigger the except block for non-whole numbers
         except (ValueError, TypeError):
+            # Catch errors from int() conversion or the manual check above
             raise ValueError(
-                f"Could not convert internal_index ({internal_index}) to integer."
+                f"Could not convert internal_index ({internal_index}) to a whole integer."
             )
-        return internal_index + (self.window_size - 1)
+        # Use the successfully converted integer index
+        return internal_index_int + (self.window_size - 1)
 
     def _get_observation(self):
         """Get the current observation."""
@@ -259,6 +266,182 @@ class TradingEnv(gym.Env):
             "transaction_cost": self.total_transaction_cost,
         }
 
+    # --- Action Handling Helpers ---
+    def _handle_buy_action(self, buy_fraction: float, current_price: float) -> tuple:
+        """Handles the logic for buy actions."""
+        if self.balance > 1e-9:
+            buy_amount_cash = self.balance * buy_fraction
+            potential_step_transaction_cost = buy_amount_cash * self.transaction_fee
+            total_required_cash = buy_amount_cash + potential_step_transaction_cost
+
+            # Check affordability *including* fee first
+            if self.balance + 1e-9 >= total_required_cash:
+                # Affordable: Calculate actual changes
+                step_transaction_cost = potential_step_transaction_cost
+                cash_for_crypto = buy_amount_cash # Amount used to buy crypto (before fee)
+                cash_change = -total_required_cash # Total cash reduction
+                position_change = 0.0 # Initialize position change
+                is_invalid_action = False # Assume valid initially
+
+                if cash_for_crypto > 0 and current_price > 1e-20:
+                    position_change = cash_for_crypto / current_price
+                else:
+                    # Edge case: Zero price or negligible crypto amount despite sufficient funds
+                    logger.debug(f"Step {self.current_step}: Zero price or negligible cash_for_crypto in Buy {buy_fraction*100}%. Penalizing.")
+                    is_invalid_action = True # Mark as invalid
+                    # Reset changes for invalid edge case
+                    step_transaction_cost = 0.0
+                    position_change = 0.0
+                    cash_change = 0.0
+            else:
+                # Not affordable
+                logger.debug(f"Step {self.current_step}: Insufficient balance for Buy {buy_fraction*100}% including fee. Have {self.balance:.4f}, need {total_required_cash:.4f}. Penalizing.")
+                is_invalid_action = True
+                step_transaction_cost = 0.0 # Ensure cost is zeroed
+                position_change = 0.0
+                cash_change = 0.0 # Ensure cash change is zeroed
+        else:
+            # Penalize buy attempt with zero balance
+            logger.debug(f"Step {self.current_step}: Zero balance, cannot Buy {buy_fraction*100}%. Penalizing.")
+            is_invalid_action = True
+            step_transaction_cost = 0.0 # Ensure cost is zeroed
+            position_change = 0.0
+            cash_change = 0.0 # Ensure cash change is zeroed
+
+        return cash_change, position_change, step_transaction_cost, is_invalid_action
+
+    def _handle_sell_action(self, sell_fraction: float, current_price: float) -> tuple:
+        """Handles the logic for sell actions."""
+        assert self.position >= -1e-9, f"Negative position ({self.position}) at step {self.current_step} before sell."
+        if self.position > 1e-9:
+            sell_amount_crypto = self.position * sell_fraction
+            cash_before_fee = sell_amount_crypto * current_price
+            step_transaction_cost = cash_before_fee * self.transaction_fee
+            cash_change = cash_before_fee - step_transaction_cost
+            position_change = -sell_amount_crypto
+            # Ensure cash change isn't negative due to high fees (unlikely with fee < 1)
+            if cash_change < 0:
+                logger.warning(f"Step {self.current_step}: Negative cash change ({cash_change}) on Sell {sell_fraction*100}%.")
+                cash_change = 0
+                step_transaction_cost = cash_before_fee # Cost equals total cash received
+            is_invalid_action = False
+        else:
+            # Invalid sell attempt (no position)
+            logger.debug(f"Step {self.current_step}: Zero position, cannot Sell {sell_fraction*100}%. Penalizing.")
+            is_invalid_action = True
+            step_transaction_cost = 0.0 # No cost for invalid action
+            cash_change = 0.0
+            position_change = 0.0
+
+        return cash_change, position_change, step_transaction_cost, is_invalid_action
+    # --- End Action Handling Helpers ---
+
+    # --- State Update and Calculation Helpers ---
+    def _apply_state_changes(
+        self,
+        cash_change: float,
+        position_change: float,
+        step_transaction_cost: float,
+        current_price: float,
+        action: int # Pass action to know if it was a buy
+    ):
+        """Applies the calculated changes to the environment state and updates position price."""
+        assert step_transaction_cost >= 0, "step_transaction_cost cannot be negative"
+        self.total_transaction_cost += step_transaction_cost
+
+        # Calculate potential new state
+        new_balance = self.balance + cash_change
+        new_position = self.position + position_change
+
+        # Log state BEFORE applying changes
+        logger.debug(
+            f"Step {self.current_step} State Update | BEFORE: Bal={self.balance:.4f}, Pos={self.position:.4f}, PosPrice={self.position_price:.4f} | CHANGES: Cash={cash_change:.4f}, Pos={position_change:.4f}, Cost={step_transaction_cost:.4f}"
+        )
+
+        # --- Update Position Price --- #
+        # Only update if there was a change in position
+        if abs(position_change) > 1e-9:
+            # If it was a BUY action (position increased)
+            if 1 <= action <= 3 and position_change > 1e-9:
+                # Calculate cost of the crypto bought (cash reduction excluding fees)
+                cash_for_crypto = position_change * current_price
+                old_total_cost = self.position * self.position_price
+                new_cost = cash_for_crypto
+                # Ensure new_position is calculated based on precise float values
+                _precise_new_position = self.position + position_change
+                if _precise_new_position > 1e-9:
+                    self.position_price = (old_total_cost + new_cost) / _precise_new_position
+                else:
+                    # This case should be rare for buys unless price is near zero
+                    self.position_price = 0
+            # If it was a SELL action or position becomes zero
+            elif abs(new_position) < 1e-9: # Check if position is effectively zero after change
+                self.position_price = 0 # Reset average price if position is sold off
+            # else: Sell action but position remains > 0 -> position_price doesn't change
+        # --- End Update Position Price --- #
+
+        # Apply changes and clamp to avoid small negative values or NaN/Inf
+        if np.isnan(new_position) or np.isinf(new_position):
+            logger.warning(f"Step {self.current_step}: NaN/Inf new_position detected. Keeping old value: {self.position}")
+        else:
+            self.position = max(0.0, float(new_position))
+
+        if np.isnan(new_balance) or np.isinf(new_balance):
+            logger.warning(f"Step {self.current_step}: NaN/Inf new_balance detected. Keeping old value: {self.balance}")
+        else:
+            self.balance = max(0.0, float(new_balance))
+
+        # Log state AFTER applying changes
+        logger.debug(
+            f"Step {self.current_step} State Update | POST: Balance={self.balance:.4f}, Position={self.position:.4f}, PositionPrice={self.position_price:.4f}"
+        )
+
+        # Final checks on applied state
+        if not np.isnan(self.position):
+             assert self.position >= -1e-9, f"Position negative after apply ({self.position})"
+        if not np.isnan(self.position_price):
+             assert self.position_price >= 0, f"Position price negative after apply ({self.position_price})"
+
+    def _calculate_reward(
+        self,
+        previous_portfolio_value: float,
+        current_portfolio_value_after_action: float,
+        is_invalid_action: bool,
+        invalid_action_penalty: float,
+    ) -> float:
+        """Calculates the reward for the current step."""
+        if is_invalid_action:
+            reward = invalid_action_penalty
+            logger.debug(f"[REWARD] Step {self.current_step}: Invalid action penalty applied: {reward:.8f}")
+        else:
+            # Assert components are finite before PnL calculation
+            assert np.isfinite(current_portfolio_value_after_action), f"Current portfolio value not finite for reward: {current_portfolio_value_after_action}"
+            assert np.isfinite(previous_portfolio_value), f"Previous portfolio value not finite for reward: {previous_portfolio_value}"
+            pnl = current_portfolio_value_after_action - previous_portfolio_value
+            # Scale reward by initial balance to keep it in a reasonable range
+            reward = (pnl / self.initial_balance) * self.reward_pnl_scale if self.initial_balance > 1e-9 else 0.0
+            logger.debug(f"[REWARD] Step {self.current_step}: PrevPort={previous_portfolio_value:.4f}, CurPort={current_portfolio_value_after_action:.4f}, PnL={pnl:.4f}, ScaledReward={reward:.8f}")
+
+        assert not np.isnan(reward) and not np.isinf(reward), f"Reward calculation resulted in NaN or Inf: {reward}"
+        return reward
+
+    def _check_termination(self, current_portfolio_value_after_action: float) -> bool:
+        """Checks if the episode should terminate."""
+        # 1. Reached end of data
+        end_of_data = self.current_step >= self.data_len - 1
+        # 2. Portfolio value dropped below threshold (e.g., 10% of initial)
+        portfolio_value_threshold = self.initial_balance * 0.10
+        # Use the portfolio value AFTER the action for termination check
+        terminated_low_portfolio = current_portfolio_value_after_action < portfolio_value_threshold
+        if terminated_low_portfolio:
+            logger.warning(
+                f"Episode terminated early at step {self.current_step} due to low portfolio value: "
+                f"${current_portfolio_value_after_action:.2f} (< {portfolio_value_threshold:.2f})"
+            )
+
+        return end_of_data or terminated_low_portfolio
+    # --- End State Update and Calculation Helpers ---
+
     def step(self, action):
         """Execute one step in the environment."""
         if self.current_step >= self.data_len:
@@ -268,10 +451,12 @@ class TradingEnv(gym.Env):
 
         assert self.action_space.contains(action), f"Invalid action: {action}"
 
-        previous_portfolio_value = (
-            self.portfolio_values[-1] if self.portfolio_values else self.initial_balance
-        )
-        invalid_action_penalty = -1.0  # Initialize penalty to a negative value
+        # --- Store previous state for reward calculation ---
+        # Use previous_price for valuing position BEFORE the current step's price is revealed
+        previous_portfolio_value = max(0, self.balance + self.position * self.previous_price)
+        # --- End Previous State ---
+
+        invalid_action_penalty = -1.0  # Define penalty value
 
         try:
             original_index_current = min(
@@ -288,167 +473,65 @@ class TradingEnv(gym.Env):
             current_price > 1e-20
         ), f"current_price is non-positive ({current_price}) at step {self.current_step}."
 
-        # Calculate current portfolio value BEFORE action logic
-        current_portfolio_value = self.balance + self.position * current_price
+        # Calculate current portfolio value BEFORE action logic based on current price - Removed, not needed for new reward
 
         position_change = 0.0
         cash_change = 0.0
         step_transaction_cost = 0.0
-        reward = 0.0
+        # reward = 0.0 # Reward calculated later
+        is_invalid_action = False # Flag for invalid actions
 
         if action == 0:
-            if self.position > 1e-9:
-                price_change = current_price - self.previous_price
-                reward = (price_change * self.position / self.initial_balance) * self.reward_pnl_scale
-            else:
-                reward = 0.0
+            # Hold action: PnL comes from price change on existing position
             step_transaction_cost = 0.0
+            # No changes to position or cash needed
         elif 1 <= action <= 3:
+            # Buy actions
             buy_fraction = 0.0
-            if action == 1:
-                buy_fraction = 0.25
-            elif action == 2:
-                buy_fraction = 0.50
-            elif action == 3:
-                buy_fraction = 1.00
-            if self.balance > 1e-9:
-                buy_amount_cash = self.balance * buy_fraction
-                step_transaction_cost = buy_amount_cash * self.transaction_fee # CALCULATION
-                cash_for_crypto = buy_amount_cash - step_transaction_cost
-                if cash_for_crypto > 0 and current_price > 1e-20:
-                    position_change = cash_for_crypto / current_price
-                    cash_change = -buy_amount_cash
-                    if position_change > 1e-9:
-                        old_value = self.position * self.position_price
-                        new_value = position_change * current_price
-                        total_position_after_buy = self.position + position_change
-                        if total_position_after_buy > 1e-9:
-                            self.position_price = (
-                                old_value + new_value
-                            ) / total_position_after_buy
-                        else:
-                            self.position_price = 0
-                else:
-                    # Penalize ineffectual buy attempt (low cash/price)
-                    logger.debug(
-                        f"Step {self.current_step}: Low cash/price for Buy {buy_fraction*100}%. Penalizing."
-                    )
-                    reward = invalid_action_penalty
-                    step_transaction_cost = 0.0 # No cost if no trade
-            else:
-                # Penalize buy attempt with zero balance
-                logger.debug(
-                    f"Step {self.current_step}: Zero balance, cannot Buy {buy_fraction*100}%. Penalizing."
-                )
-                reward = invalid_action_penalty
-                step_transaction_cost = 0.0 # No cost if no trade
+            if action == 1: buy_fraction = 0.25
+            elif action == 2: buy_fraction = 0.50
+            elif action == 3: buy_fraction = 1.00
+            cash_change, position_change, step_transaction_cost, is_invalid_action = self._handle_buy_action(buy_fraction, current_price)
         elif 4 <= action <= 6:
-            assert (
-                self.position >= -1e-9
-            ), f"Negative position ({self.position}) at step {self.current_step} before sell."
+            # Sell actions
             sell_fraction = 0.0
-            if action == 4:
-                sell_fraction = 0.25
-            elif action == 5:
-                sell_fraction = 0.50
-            elif action == 6:
-                sell_fraction = 1.00
-            if self.position > 1e-9:
-                sell_amount_crypto = self.position * sell_fraction
-                cash_before_fee = sell_amount_crypto * current_price
-                step_transaction_cost = cash_before_fee * self.transaction_fee
-                cash_change = cash_before_fee - step_transaction_cost
-                position_change = -sell_amount_crypto
-                if abs(self.position + position_change) < 1e-9:
-                    self.position_price = 0
-                if cash_change < 0:
-                    logger.warning(
-                        f"Step {self.current_step}: Negative cash change ({cash_change}) on Sell {sell_fraction*100}%."
-                    )
-                    cash_change = 0
-                    step_transaction_cost = cash_before_fee
-            else:
-                # Invalid sell attempt
-                logger.debug(
-                    f"Step {self.current_step}: Zero position, cannot Sell {sell_fraction*100}%. Penalizing."
-                )  # Updated log message
-                reward = invalid_action_penalty # Penalty is the only reward component
-                step_transaction_cost = 0.0 # No cost for invalid action
+            if action == 4: sell_fraction = 0.25
+            elif action == 5: sell_fraction = 0.50
+            elif action == 6: sell_fraction = 1.00
+            cash_change, position_change, step_transaction_cost, is_invalid_action = self._handle_sell_action(sell_fraction, current_price)
 
-        # Apply transaction cost penalty ONLY if a valid trade occurred (step_cost > 0)
-        # and the reward wasn't already set by the invalid penalty
-        if step_transaction_cost > 1e-9 and action != 0 and not (4 <= action <= 6 and self.position <= 1e-9):
-            reward_cost = (
-                -(step_transaction_cost / self.initial_balance) * self.reward_cost_scale
-                if self.initial_balance > 1e-9
-                else 0.0
-            )
-            # For buy/sell, calculate PnL based on portfolio change AFTER cost
-            # This is tricky, let's stick to simpler cost penalty for now and potentially zero base reward for buy/sell
-            # Alternative: reward = cash_change * scale ? Needs careful thought.
-            # For now, let action 0 be the main reward source, cost is penalty.
-            reward = reward_cost
-            # TODO: Revisit reward for Buy/Sell actions. Maybe use portfolio change AFTER cost?
-            reward_pnl = 0.0 # PnL is not added for buy/sell in current logic
-            was_invalid = False
-        elif (4 <= action <= 6 and self.position <= 1e-9) or \
-             (1 <= action <= 3 and (self.balance <= 1e-9 or cash_for_crypto <= 0)):
-             # Handle invalid actions explicitly to store their penalty for logging
-             reward_pnl = 0.0
-             reward_cost = 0.0
-             was_invalid = True
-             # Reward is already set to invalid_action_penalty in the action logic blocks
-        else: # Action 0 or valid trade with zero cost (should not happen often)
-             reward_pnl = reward # Reward for action 0 is PnL
-             reward_cost = 0.0
-             was_invalid = False
+        # --- Apply State Changes ---
+        # Call the helper to update balance, position, total cost, and position price
+        self._apply_state_changes(cash_change, position_change, step_transaction_cost, current_price, action)
 
-        # Accumulate total cost
-        self.total_transaction_cost = self.total_transaction_cost + step_transaction_cost # Explicit addition
+        # --- Calculate Portfolio Value AFTER Action ---
+        # Assert components are finite before calculation
+        assert np.isfinite(self.balance), f"Balance is not finite after state change: {self.balance}"
+        assert np.isfinite(self.position), f"Position is not finite after state change: {self.position}"
+        assert np.isfinite(current_price), f"Current price is not finite: {current_price}"
+        current_portfolio_value_after_action = self.balance + self.position * current_price
+        # Add NaN check before assertion
+        if not np.isnan(current_portfolio_value_after_action):
+             assert current_portfolio_value_after_action >= -1e-9, f"Negative portfolio value after action ({current_portfolio_value_after_action})"
+        current_portfolio_value_after_action = max(0, current_portfolio_value_after_action) # Ensure non-negative
 
-        new_balance = self.balance + cash_change
-        new_position = self.position + position_change
-        logger.debug(
-            f"Step {self.current_step} Update | Action: {action} | Price: {current_price:.4f} | BEFORE: Bal={self.balance:.4f}, Pos={self.position:.4f} | CHANGES: Cash={cash_change:.4f}, Pos={position_change:.4f}, Cost={step_transaction_cost:.4f} | AFTER(calc): Bal={new_balance:.4f}, Pos={new_position:.4f}"
+        # --- Calculate Reward based on Portfolio Change ---
+        reward = self._calculate_reward(
+            previous_portfolio_value,
+            current_portfolio_value_after_action,
+            is_invalid_action,
+            invalid_action_penalty,
         )
-        if np.isnan(new_position) or np.isinf(new_position):
-            logger.warning(
-                f"Step {self.current_step}: NaN/Inf new_position. Reverting."
-            )
-            new_position = self.position
-        if np.isnan(new_balance) or np.isinf(new_balance):
-            logger.warning(f"Step {self.current_step}: NaN/Inf new_balance. Reverting.")
-            new_balance = self.balance
-        self.position = max(0.0, float(new_position))
-        self.balance = max(0.0, float(new_balance))
-        logger.debug(
-            f"Step {self.current_step} Update | POST: Balance={self.balance:.4f}, Position={self.position:.4f}"
-        )
-        assert self.balance >= -1e-9, f"Balance negative ({self.balance})"
-        assert self.position >= -1e-9, f"Position negative ({self.position})"
-        assert (
-            self.position_price >= 0
-        ), f"Position price negative ({self.position_price})"
 
         # --- Termination Conditions --- #
-        # 1. Reached end of data
-        end_of_data = self.current_step >= self.data_len - 1
-        # 2. Portfolio value dropped below threshold (e.g., 10% of initial)
-        portfolio_value_threshold = self.initial_balance * 0.10
-        terminated_low_portfolio = current_portfolio_value < portfolio_value_threshold
-        if terminated_low_portfolio:
-            logger.warning(
-                f"Episode terminated early at step {self.current_step} due to low portfolio value: "
-                f"${current_portfolio_value:.2f} (< 10% of initial ${self.initial_balance:.2f})"
-            )
-
-        done = end_of_data or terminated_low_portfolio
+        done = self._check_termination(current_portfolio_value_after_action)
         # --- End Termination --- #
 
+        # --- Prepare and Return Results --- #
         next_obs = self._get_observation()
         info = self._get_info()
         # Add the cost incurred in THIS step to the info dict
-        info['step_transaction_cost'] = step_transaction_cost 
+        info['step_transaction_cost'] = step_transaction_cost
         self.portfolio_values.append(info["portfolio_value"])
 
         if done:
@@ -456,17 +539,11 @@ class TradingEnv(gym.Env):
                 f"Final portfolio value: ${info['portfolio_value']:.2f}, Total Transaction Cost: ${self.total_transaction_cost:.2f}"
             )
 
-        # Update previous price for next step
+        # Update previous price for next step's reward calculation
         self.previous_price = current_price
 
         self.current_step += 1
-        # --- Log Reward Breakdown --- # 
-        logger.debug(f"[REWARD DEBUG] Step: {self.current_step-1}, Action: {action}, "
-                     f"StepCost: {step_transaction_cost:.4f}, PnL_Rew: {reward_pnl:.4f}, "
-                     f"Cost_Rew: {reward_cost:.4f}, InvalidPenalty: {invalid_action_penalty if was_invalid else 0.0:.4f}, "
-                     f"Final_Reward: {reward:.4f}")
-        # --- End Reward Breakdown --- #
-        return next_obs, reward, done, False, info
+        return next_obs, reward, done, False, info # Return truncated=False
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)

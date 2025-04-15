@@ -316,6 +316,10 @@ class RainbowNetwork(nn.Module):
             self.num_actions,
             self.num_atoms,
         ), "q_logits shape mismatch"
+        # --- ADDED: Check q_logits before log_softmax --- 
+        assert not torch.isnan(q_logits).any(), "NaN detected in q_logits before log_softmax"
+        assert not torch.isinf(q_logits).any(), "Inf detected in q_logits before log_softmax"
+        # --- END ADDED --- 
         # -----------------------------------------
 
         # --- Get Log Probabilities (for training loss) ---

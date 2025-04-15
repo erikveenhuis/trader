@@ -95,66 +95,63 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
     # --- Load from Checkpoint if resuming --- 
     agent_loaded = False # Flag to track if agent state was successfully loaded
     if resume_training_flag:
-        # --- MODIFIED: Prioritize loading TRAINER state first ---
+        # --- MODIFIED: Load unified checkpoint ---
         trainer_checkpoint_path = str(Path(model_dir) / "checkpoint_trainer_latest.pt")
-        agent_checkpoint_prefix = str(Path(model_dir) / "rainbow_transformer_latest") # Agent prefix
+        logger.info(f"Resume flag is set. Attempting to load unified checkpoint from: {trainer_checkpoint_path}")
 
-        if os.path.exists(trainer_checkpoint_path):
-            logger.info(f"Found latest trainer checkpoint: {trainer_checkpoint_path}")
-            # Load trainer checkpoint first to get episode etc.
-            trainer_checkpoint = load_checkpoint(trainer_checkpoint_path)
-            if trainer_checkpoint:
-                start_episode = trainer_checkpoint.get("episode", 0)
-                # Store trainer's step count for logging, but prioritize agent's later
-                trainer_steps = trainer_checkpoint.get("total_train_steps", 0) 
-                initial_best_score = trainer_checkpoint.get("best_validation_metric", -np.inf)
-                initial_early_stopping_counter = trainer_checkpoint.get("early_stopping_counter", 0)
-                logger.info(f"Loaded trainer state: Starting from Ep {start_episode}, BestScore {initial_best_score:.4f}")
+        loaded_checkpoint = load_checkpoint(trainer_checkpoint_path)
 
-                # --- MODIFIED: Now attempt to load the corresponding LATEST agent state --- 
-                # Check if the corresponding agent file exists
-                agent_pt_path = f"{agent_checkpoint_prefix}_rainbow_agent.pt"
-                if os.path.exists(agent_pt_path):
-                    try:
-                        # Instantiate agent *before* loading state
-                        agent = AgentClass(config=agent_config, device=device)
-                        logger.info(f"Attempting to load agent state from prefix: {agent_checkpoint_prefix}")
-                        agent.load_model(agent_checkpoint_prefix) # Load latest agent state
-                        # Overwrite start_total_steps with the definitive value from the agent
-                        start_total_steps = agent.total_steps 
-                        logger.info(f"Successfully loaded LATEST agent state. Resuming from step {start_total_steps}.")
-                        # Sanity check trainer steps vs agent steps
-                        if start_total_steps != trainer_steps:
-                             logger.warning(f"Agent steps ({start_total_steps}) differ from trainer checkpoint steps ({trainer_steps}). Using agent steps.")
-                        agent_loaded = True # Flag that agent state was loaded
-                    except Exception as e:
-                         logger.error(f"Error loading LATEST agent state from {agent_checkpoint_prefix}: {e}. Training starts with fresh agent.", exc_info=True)
-                         # Reset state as loading failed
-                         start_episode = 0
-                         start_total_steps = 0
-                         initial_best_score = -np.inf
-                         initial_early_stopping_counter = 0
-                         # agent = AgentClass(config=agent_config, device=device) # Re-init fresh agent - will be handled below if agent_loaded is False
-                         agent_loaded = False
+        if loaded_checkpoint:
+            logger.info("Unified checkpoint loaded successfully.")
+            # Extract trainer state
+            start_episode = loaded_checkpoint.get("episode", 0)
+            initial_best_score = loaded_checkpoint.get("best_validation_metric", -np.inf)
+            initial_early_stopping_counter = loaded_checkpoint.get("early_stopping_counter", 0)
+            # Temporary store trainer steps for comparison, agent steps are definitive
+            trainer_steps_from_checkpoint = loaded_checkpoint.get("total_train_steps", 0)
+            logger.info(f"Extracted trainer state: Ep={start_episode}, BestScore={initial_best_score:.4f}, EarlyStopCounter={initial_early_stopping_counter}, TrainerSteps={trainer_steps_from_checkpoint}")
+            
+            # Instantiate the agent *before* loading its state
+            try:
+                # Validate loaded config if necessary (agent init might do this)
+                loaded_agent_config = loaded_checkpoint.get("agent_config")
+                if loaded_agent_config != agent_config:
+                     logger.warning("Agent config in checkpoint differs from current config file. Using current config.")
+                     # Decide if this should be an error or just a warning
+                     # agent_config = loaded_agent_config # Optionally force use of loaded config
+                
+                agent = AgentClass(config=agent_config, device=device)
+                logger.info("Agent instantiated. Attempting to load agent state from checkpoint...")
+                agent_loaded = agent.load_state(loaded_checkpoint) # Pass the whole dict
+
+                if agent_loaded:
+                    # Agent state loaded successfully, use its step count
+                    start_total_steps = agent.total_steps
+                    logger.info(f"Agent state loaded successfully. Resuming from Agent Step: {start_total_steps}")
+                    # Sanity check step counts
+                    if start_total_steps != trainer_steps_from_checkpoint:
+                        logger.warning(f"Agent steps ({start_total_steps}) differ from trainer checkpoint steps ({trainer_steps_from_checkpoint}). Using agent steps.")
                 else:
-                    logger.warning(f"Latest agent checkpoint file {agent_pt_path} not found. Starting with fresh agent state.")
-                    start_episode = 0 # Reset episode if agent state missing
+                    # Agent state loading failed, reset trainer progress
+                    logger.error("Failed to load agent state from the checkpoint dictionary, even though checkpoint file was loaded. Starting training from scratch.")
+                    start_episode = 0
                     start_total_steps = 0
                     initial_best_score = -np.inf
                     initial_early_stopping_counter = 0
-                    # agent = AgentClass(config=agent_config, device=device) # Init fresh agent - handled below
-                    agent_loaded = False
-            else:
-                logger.warning(f"Failed to load data from trainer checkpoint {trainer_checkpoint_path}. Starting training from scratch.")
-                # agent = AgentClass(config=agent_config, device=device) - handled below
-                agent_loaded = False
+                    # Agent instance exists but is fresh
+            except Exception as e:
+                 logger.error(f"Error occurred while instantiating agent or loading state from checkpoint: {e}. Starting training from scratch.", exc_info=True)
+                 start_episode = 0
+                 start_total_steps = 0
+                 initial_best_score = -np.inf
+                 initial_early_stopping_counter = 0
+                 agent_loaded = False # Ensure agent is re-instantiated below
+
         else:
-            logger.warning(f"Trainer checkpoint {trainer_checkpoint_path} not found. Starting training from scratch.")
-            # agent = AgentClass(config=agent_config, device=device) - handled below
+            # Checkpoint file not found or failed basic loading/validation
+            logger.warning(f"Failed to load or validate checkpoint file at {trainer_checkpoint_path}. Starting training from scratch.")
             agent_loaded = False
-    # else: # Not resuming handled below
-        # agent = AgentClass(config=agent_config, device=device)
-        # agent_loaded = False
+        # --- END MODIFIED ---
 
     # --- Ensure agent is instantiated if not loaded during resume attempt --- 
     if not agent_loaded:
@@ -207,7 +204,7 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
 
     # --- Run Training ---
     trainer.train(
-        env=initial_env,
+        # env=initial_env, # Removed argument
         num_episodes=num_episodes,
         start_episode=start_episode,
         start_total_steps=start_total_steps,
