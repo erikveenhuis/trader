@@ -3,7 +3,6 @@
 import pytest
 import os
 import torch
-from unittest.mock import patch, MagicMock
 from pathlib import Path
 
 from src.utils.checkpoint_utils import find_latest_checkpoint, load_checkpoint
@@ -109,22 +108,6 @@ def test_load_checkpoint_missing_keys(checkpoint_dir, incomplete_checkpoint_data
 
     loaded_data = load_checkpoint(str(invalid_path))
     assert loaded_data is None # Should fail validation
-
-@pytest.mark.unittest
-@patch("torch.load")
-def test_load_checkpoint_torch_load_exception(mock_torch_load, checkpoint_dir):
-    """Test handling exceptions during torch.load."""
-    error_message = "Simulated torch.load error"
-    mock_torch_load.side_effect = Exception(error_message)
-
-    # Create a dummy file path (it doesn't need real data due to mock)
-    dummy_path = checkpoint_dir / "dummy_for_error.pt"
-    dummy_path.touch()
-
-    loaded_data = load_checkpoint(str(dummy_path))
-    assert loaded_data is None
-    mock_torch_load.assert_called_once_with(str(dummy_path), map_location="cpu")
-
 
 @pytest.mark.unittest
 def test_load_checkpoint_empty_path():

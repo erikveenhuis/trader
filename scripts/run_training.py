@@ -9,8 +9,7 @@ import numpy as np
 import yaml  # Added for config loading
 import argparse  # Added for command-line arguments
 
-# Moved imports to top - USE SRC PREFIX
-from src.env.trading_env import TradingEnv
+from trading_env import TradingEnv, TradingEnvConfig # Import config class again
 from src.trainer import RainbowTrainerModule
 from src.agent import RainbowDQNAgent
 from src.utils.utils import setup_global_logging, set_seeds, get_random_data_file
@@ -95,62 +94,66 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
     # --- Load from Checkpoint if resuming --- 
     agent_loaded = False # Flag to track if agent state was successfully loaded
     if resume_training_flag:
-        # --- MODIFIED: Load unified checkpoint ---
-        trainer_checkpoint_path = str(Path(model_dir) / "checkpoint_trainer_latest.pt")
-        logger.info(f"Resume flag is set. Attempting to load unified checkpoint from: {trainer_checkpoint_path}")
-
-        loaded_checkpoint = load_checkpoint(trainer_checkpoint_path)
-
-        if loaded_checkpoint:
-            logger.info("Unified checkpoint loaded successfully.")
-            # Extract trainer state
-            start_episode = loaded_checkpoint.get("episode", 0)
-            initial_best_score = loaded_checkpoint.get("best_validation_metric", -np.inf)
-            initial_early_stopping_counter = loaded_checkpoint.get("early_stopping_counter", 0)
-            # Temporary store trainer steps for comparison, agent steps are definitive
-            trainer_steps_from_checkpoint = loaded_checkpoint.get("total_train_steps", 0)
-            logger.info(f"Extracted trainer state: Ep={start_episode}, BestScore={initial_best_score:.4f}, EarlyStopCounter={initial_early_stopping_counter}, TrainerSteps={trainer_steps_from_checkpoint}")
-            
-            # Instantiate the agent *before* loading its state
-            try:
-                # Validate loaded config if necessary (agent init might do this)
-                loaded_agent_config = loaded_checkpoint.get("agent_config")
-                if loaded_agent_config != agent_config:
-                     logger.warning("Agent config in checkpoint differs from current config file. Using current config.")
-                     # Decide if this should be an error or just a warning
-                     # agent_config = loaded_agent_config # Optionally force use of loaded config
-                
-                agent = AgentClass(config=agent_config, device=device)
-                logger.info("Agent instantiated. Attempting to load agent state from checkpoint...")
-                agent_loaded = agent.load_state(loaded_checkpoint) # Pass the whole dict
-
-                if agent_loaded:
-                    # Agent state loaded successfully, use its step count
-                    start_total_steps = agent.total_steps
-                    logger.info(f"Agent state loaded successfully. Resuming from Agent Step: {start_total_steps}")
-                    # Sanity check step counts
-                    if start_total_steps != trainer_steps_from_checkpoint:
-                        logger.warning(f"Agent steps ({start_total_steps}) differ from trainer checkpoint steps ({trainer_steps_from_checkpoint}). Using agent steps.")
-                else:
-                    # Agent state loading failed, reset trainer progress
-                    logger.error("Failed to load agent state from the checkpoint dictionary, even though checkpoint file was loaded. Starting training from scratch.")
-                    start_episode = 0
-                    start_total_steps = 0
-                    initial_best_score = -np.inf
-                    initial_early_stopping_counter = 0
-                    # Agent instance exists but is fresh
-            except Exception as e:
-                 logger.error(f"Error occurred while instantiating agent or loading state from checkpoint: {e}. Starting training from scratch.", exc_info=True)
-                 start_episode = 0
-                 start_total_steps = 0
-                 initial_best_score = -np.inf
-                 initial_early_stopping_counter = 0
-                 agent_loaded = False # Ensure agent is re-instantiated below
-
-        else:
-            # Checkpoint file not found or failed basic loading/validation
-            logger.warning(f"Failed to load or validate checkpoint file at {trainer_checkpoint_path}. Starting training from scratch.")
+        # --- MODIFIED: Use find_latest_checkpoint utility ---
+        trainer_checkpoint_path = find_latest_checkpoint(model_dir, "checkpoint_trainer")
+        if not trainer_checkpoint_path:
+            logger.warning(f"No suitable checkpoint found in {model_dir}. Starting training from scratch.")
             agent_loaded = False
+        else:
+            logger.info(f"Resume flag is set. Attempting to load unified checkpoint from: {trainer_checkpoint_path}")
+
+            loaded_checkpoint = load_checkpoint(trainer_checkpoint_path)
+
+            if loaded_checkpoint:
+                logger.info("Unified checkpoint loaded successfully.")
+                # Extract trainer state
+                start_episode = loaded_checkpoint.get("episode", 0)
+                initial_best_score = loaded_checkpoint.get("best_validation_metric", -np.inf)
+                initial_early_stopping_counter = loaded_checkpoint.get("early_stopping_counter", 0)
+                # Temporary store trainer steps for comparison, agent steps are definitive
+                trainer_steps_from_checkpoint = loaded_checkpoint.get("total_train_steps", 0)
+                logger.info(f"Extracted trainer state: Ep={start_episode}, BestScore={initial_best_score:.4f}, EarlyStopCounter={initial_early_stopping_counter}, TrainerSteps={trainer_steps_from_checkpoint}")
+                
+                # Instantiate the agent *before* loading its state
+                try:
+                    # Validate loaded config if necessary (agent init might do this)
+                    loaded_agent_config = loaded_checkpoint.get("agent_config")
+                    if loaded_agent_config != agent_config:
+                         logger.warning("Agent config in checkpoint differs from current config file. Using current config.")
+                         # Decide if this should be an error or just a warning
+                         # agent_config = loaded_agent_config # Optionally force use of loaded config
+                    
+                    agent = AgentClass(config=agent_config, device=device)
+                    logger.info("Agent instantiated. Attempting to load agent state from checkpoint...")
+                    agent_loaded = agent.load_state(loaded_checkpoint) # Pass the whole dict
+
+                    if agent_loaded:
+                        # Agent state loaded successfully, use its step count
+                        start_total_steps = agent.total_steps
+                        logger.info(f"Agent state loaded successfully. Resuming from Agent Step: {start_total_steps}")
+                        # Sanity check step counts
+                        if start_total_steps != trainer_steps_from_checkpoint:
+                            logger.warning(f"Agent steps ({start_total_steps}) differ from trainer checkpoint steps ({trainer_steps_from_checkpoint}). Using agent steps.")
+                    else:
+                        # Agent state loading failed, reset trainer progress
+                        logger.error("Failed to load agent state from the checkpoint dictionary, even though checkpoint file was loaded. Starting training from scratch.")
+                        start_episode = 0
+                        start_total_steps = 0
+                        initial_best_score = -np.inf
+                        initial_early_stopping_counter = 0
+                        # Agent instance exists but is fresh
+                except Exception as e:
+                     logger.error(f"Error occurred while instantiating agent or loading state from checkpoint: {e}. Starting training from scratch.", exc_info=True)
+                     start_episode = 0
+                     start_total_steps = 0
+                     initial_best_score = -np.inf
+                     initial_early_stopping_counter = 0
+                     agent_loaded = False # Ensure agent is re-instantiated below
+
+            else:
+                # Checkpoint file not found or failed basic loading/validation
+                logger.warning(f"Failed to load or validate checkpoint file at {trainer_checkpoint_path}. Starting training from scratch.")
+                agent_loaded = False
         # --- END MODIFIED ---
 
     # --- Ensure agent is instantiated if not loaded during resume attempt --- 
@@ -186,10 +189,13 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
         ), "Failed to get a valid initial data file path"
         logger.info(f"Using initial file for env setup check: {initial_file.name}")
         # Use env_config for environment parameters
+        # Add data_path to the env_config dictionary
+        env_config['data_path'] = str(initial_file)
+        # Create config object first, now including data_path
+        env_config_obj = TradingEnvConfig(**env_config)
         initial_env = TradingEnv(
-            data_path=str(initial_file),
-            window_size=agent_config["window_size"],
-            **env_config,  # Pass initial_balance, transaction_fee, etc.
+            # data_path=str(initial_file), # Remove data_path, now in config
+            config=env_config_obj # Pass the config object
         )
         assert isinstance(
             initial_env, TradingEnv
@@ -359,9 +365,7 @@ def main():  # Remove default config_path
         eval_trainer = RainbowTrainerModule(
             agent=eval_agent, device=device, data_manager=data_manager, config=config
         )
-        assert isinstance(
-            eval_trainer, RainbowTrainerModule
-        ), "Failed to instantiate trainer for evaluation"
+        
         # Run evaluation - internal asserts will check inputs
         evaluate_on_test_data(
             agent=eval_agent,

@@ -8,15 +8,8 @@ import torch
 # if src_path not in sys.path:
 #     sys.path.insert(0, src_path)
 
-# Use src package prefix
-try:
-    from src.buffer import PrioritizedReplayBuffer, Experience, SumTree
-except ImportError as e:
-    print(f"Failed to import from src.buffer: {e}")
-    print(f"sys.path: {sys.path}")
-    pytest.skip(
-        f"Skipping buffer tests due to import error: {e}", allow_module_level=True
-    )
+# Direct import from src package
+from src.buffer import PrioritizedReplayBuffer, Experience, SumTree
 
 # --- Constants for Dummy Data --- #
 BUFFER_CAPACITY = 100

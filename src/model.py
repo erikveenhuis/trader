@@ -311,6 +311,8 @@ class RainbowNetwork(nn.Module):
         q_logits = (
             value_logits + advantage_logits - advantage_logits.mean(dim=1, keepdim=True)
         )
+        # Add numerical stability
+        q_logits = torch.clamp(q_logits, min=-1e4, max=1e4)
         assert q_logits.shape == (
             batch_size,
             self.num_actions,

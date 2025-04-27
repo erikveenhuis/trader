@@ -284,11 +284,7 @@ def test_rainbow_network_get_q_values(network, default_config, device):
 
 @pytest.mark.unittest
 def test_rainbow_network_reset_noise(network, device):
-    # Ensure network has NoisyLinear layers
-    has_noisy = any(isinstance(m, NoisyLinear) for m in network.modules())
-    if not has_noisy:
-        pytest.skip("Network does not contain NoisyLinear layers.")
-
+    # Network should always have NoisyLinear layers
     network.train()  # Reset noise only affects training mode
 
     # Capture initial epsilon values from a NoisyLinear layer

@@ -3,6 +3,9 @@ import torch
 import logging
 import numpy as np
 from typing import Optional, Dict, Any
+import glob
+import re
+from pathlib import Path
 
 logger = logging.getLogger("CheckpointUtils")
 
@@ -11,10 +14,22 @@ def find_latest_checkpoint(
     model_dir: str = "models", model_prefix: str = "checkpoint_rainbow"
 ) -> Optional[str]:
     """Finds the latest checkpoint file based on timestamp or name."""
-    # Simple approach: look for specific latest/best files first
+    # First try to find the latest checkpoint with the new naming pattern
+    # Look for files matching the pattern: checkpoint_trainer_latest_YYYYMMDD_epXXX_rewardX.XXXX.pt
+    pattern = os.path.join(model_dir, f"{model_prefix}_latest_*_ep*_reward*.pt")
+    matching_files = glob.glob(pattern)
+    
+    if matching_files:
+        # Sort files by modification time (newest first)
+        matching_files.sort(key=os.path.getmtime, reverse=True)
+        latest_path = matching_files[0]
+        logger.info(f"Found latest checkpoint with new naming pattern: {latest_path}")
+        return latest_path
+    
+    # Fallback to old naming pattern
     latest_path = os.path.join(model_dir, f"{model_prefix}_latest.pt")
     if os.path.exists(latest_path):
-        logger.info(f"Found latest checkpoint: {latest_path}")
+        logger.info(f"Found latest checkpoint with old naming pattern: {latest_path}")
         return latest_path
 
     best_path = os.path.join(model_dir, f"{model_prefix}_best.pt")

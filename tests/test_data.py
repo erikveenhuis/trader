@@ -7,13 +7,8 @@ import pytest
 # if src_path not in sys.path:
 #     sys.path.insert(0, src_path)
 
-# Use src package prefix
-try:
-    from src.data import DataManager
-except ImportError as e:
-    pytest.skip(
-        f"Skipping data tests due to import error: {e}", allow_module_level=True
-    )
+# Direct import from src package
+from src.data import DataManager
 
 
 # --- Fixture to create dummy data structure ---

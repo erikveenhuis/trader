@@ -9,7 +9,7 @@ import os
 # Import necessary components from other modules using relative imports
 from .agent import RainbowDQNAgent
 from .trainer import RainbowTrainerModule
-from .env import TradingEnv
+from trading_env import TradingEnv, TradingEnvConfig
 from .data import DataManager
 from .utils.utils import set_seeds
 from .metrics import PerformanceTracker, calculate_episode_score
@@ -69,8 +69,14 @@ def evaluate_on_test_data(
     for i, test_file in enumerate(test_files):
         logger.info(f"--- TEST FILE {i+1}/{len(test_files)}: {test_file.name} ---")
         try:
+            # Add data_path to the env_config dictionary
+            current_env_config = env_config.copy() # Avoid modifying original dict
+            current_env_config['data_path'] = str(test_file)
+            # Create config object first, now including data_path
+            env_config_obj = TradingEnvConfig(**current_env_config)
             test_env = TradingEnv(
-                data_path=str(test_file), window_size=window_size, **env_config
+                # data_path=str(test_file), # Remove data_path, now in config
+                config=env_config_obj # Pass the config object
             )
             assert isinstance(
                 test_env, TradingEnv
@@ -174,22 +180,6 @@ def evaluate_on_test_data(
             "avg_test_episode_score": avg_test_episode_score,
             # --- END ADDED ---
         }
-        logger.info("=============================================")
-        logger.info(
-            f"TEST EVALUATION SUMMARY (RAINBOW) ({len(successful_results)}/{len(test_files)} files successful)"
-        )
-        # Log Min/Avg/Max for Reward, Portfolio, Return, TxCost
-        logger.info(f"Total Reward (Min/Avg/Max): {metrics_summary['min_reward']:.2f} / {metrics_summary['avg_reward']:.2f} / {metrics_summary['max_reward']:.2f}")
-        logger.info(f"Final Portfolio (Min/Avg/Max): ${metrics_summary['min_portfolio']:.2f} / ${metrics_summary['avg_portfolio']:.2f} / ${metrics_summary['max_portfolio']:.2f}")
-        logger.info(f"Total Return % (Min/Avg/Max): {metrics_summary['min_return']:.2f}% / {metrics_summary['avg_return']:.2f}% / {metrics_summary['max_return']:.2f}%")
-        logger.info(f"Transaction Costs (Min/Avg/Max): ${metrics_summary['min_transaction_costs']:.2f} / ${metrics_summary['avg_transaction_costs']:.2f} / ${metrics_summary['max_transaction_costs']:.2f}")
-        # Log other averages
-        logger.info(f"Average Sharpe Ratio: {metrics_summary['avg_sharpe']:.4f}")
-        logger.info(f"Average Max Drawdown: {metrics_summary['avg_drawdown']*100:.2f}%")
-        # --- ADDED: Log Average Test Score ---
-        logger.info(f"Average Episode Score: {metrics_summary['avg_test_episode_score']:.4f}")
-        # --- END ADDED ---
-        logger.info("=============================================")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         results_file = Path(model_dir) / f"test_results_rainbow_score_{avg_test_episode_score:.4f}_{timestamp}.json"
@@ -223,8 +213,10 @@ def evaluate_on_test_data(
         except Exception as e:
             logger.error(f"Error saving test results to JSON: {e}")
 
-        # Print detailed results
-        logger.info("Results per test file:")
+        # Print detailed results FIRST
+        logger.info("=============================================")
+        logger.info("RESULTS PER TEST FILE")
+        logger.info("=============================================")
         for r in results:
             status = "Success" if r["reward"] > -np.inf else "Failed"
             logger.info(f"  {r['file']} ({status}):")
@@ -237,6 +229,27 @@ def evaluate_on_test_data(
             logger.info(
                 f"    Transaction Costs: ${r.get('transaction_costs', 'N/A'):.2f}"
             )
+            if 'episode_score' in r: # Log score if available
+                logger.info(f"    Episode Score: {r['episode_score']:.4f}")
+
+        # Now print the summary
+        logger.info("=============================================")
+        logger.info(
+            f"TEST EVALUATION SUMMARY (RAINBOW) ({len(successful_results)}/{len(test_files)} files successful)"
+        )
+        # Log Min/Avg/Max for Reward, Portfolio, Return, TxCost
+        logger.info(f"Total Reward (Min/Avg/Max): {metrics_summary['min_reward']:.2f} / {metrics_summary['avg_reward']:.2f} / {metrics_summary['max_reward']:.2f}")
+        logger.info(f"Final Portfolio (Min/Avg/Max): ${metrics_summary['min_portfolio']:.2f} / ${metrics_summary['avg_portfolio']:.2f} / ${metrics_summary['max_portfolio']:.2f}")
+        logger.info(f"Total Return % (Min/Avg/Max): {metrics_summary['min_return']:.2f}% / {metrics_summary['avg_return']:.2f}% / {metrics_summary['max_return']:.2f}%")
+        logger.info(f"Transaction Costs (Min/Avg/Max): ${metrics_summary['min_transaction_costs']:.2f} / ${metrics_summary['avg_transaction_costs']:.2f} / ${metrics_summary['max_transaction_costs']:.2f}")
+        # Log other averages
+        logger.info(f"Average Sharpe Ratio: {metrics_summary['avg_sharpe']:.4f}")
+        logger.info(f"Average Max Drawdown: {metrics_summary['avg_drawdown']*100:.2f}%")
+        # --- ADDED: Log Average Test Score ---
+        logger.info(f"Average Episode Score: {metrics_summary['avg_test_episode_score']:.4f}")
+        # --- END ADDED ---
+        logger.info("=============================================")
+
     else:
         logger.warning("No successful evaluations on test data.")
 

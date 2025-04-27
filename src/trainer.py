@@ -2,8 +2,9 @@ import torch
 import numpy as np
 import logging
 import os
+import sys
 from pathlib import Path
-from .env import TradingEnv  # Use relative import
+from trading_env import TradingEnv, TradingEnvConfig  # Use installed package
 from .agent import RainbowDQNAgent  # Use relative import
 from .data import DataManager  # Use relative import
 from .metrics import (
@@ -110,6 +111,9 @@ class RainbowTrainerModule:
         ), "Invalid total_steps for checkpoint"
         assert isinstance(is_best, bool), "is_best flag must be boolean"
 
+        # Get current date in YYYYMMDD format
+        current_date = datetime.now().strftime("%Y%m%d")
+
         # Agent state (network, optimizer, agent_steps) is saved via agent.save_model()
         # This checkpoint primarily stores trainer state.
         checkpoint = {
@@ -150,11 +154,13 @@ class RainbowTrainerModule:
             logger.warning("Agent networks not initialized, cannot save checkpoint.")
             return
 
-        # Save the latest checkpoint
+        # Save the latest checkpoint with date, episode and reward in filename
         try:
-            torch.save(checkpoint, self.latest_trainer_checkpoint_path)
+            # Construct filename with date, episode and reward
+            latest_checkpoint_path = f"{self.latest_trainer_checkpoint_path.rsplit('.', 1)[0]}_{current_date}_ep{episode}_reward{self.best_validation_metric:.4f}.pt"
+            torch.save(checkpoint, latest_checkpoint_path)
             logger.info(
-                f"Latest checkpoint saved to {self.latest_trainer_checkpoint_path}"
+                f"Latest checkpoint saved to {latest_checkpoint_path}"
             )
             logger.info(f"  Episode: {episode}")
             logger.info(f"  Total Steps: {total_steps}")
@@ -165,12 +171,12 @@ class RainbowTrainerModule:
 
         # Save the best checkpoint if this is the best model so far
         if is_best:
-            # Construct the filename with the score if available
+            # Construct the filename with date, episode and score
             if validation_score is not None:
-                best_checkpoint_path = f"{self.best_trainer_checkpoint_base_path}_score_{validation_score:.4f}.pt"
+                best_checkpoint_path = f"{self.best_trainer_checkpoint_base_path}_{current_date}_ep{episode}_score_{validation_score:.4f}.pt"
             else:
                 # Fallback if score isn't passed (shouldn't happen for best)
-                best_checkpoint_path = f"{self.best_trainer_checkpoint_base_path}.pt"
+                best_checkpoint_path = f"{self.best_trainer_checkpoint_base_path}_{current_date}_ep{episode}.pt"
             try:
                 # Use the dynamically constructed path
                 torch.save(checkpoint, best_checkpoint_path)
@@ -181,7 +187,7 @@ class RainbowTrainerModule:
                 if validation_score is not None:
                     self.best_validation_metric = validation_score
                     # --- MODIFIED: Construct filename with score ---
-                    best_model_save_prefix = f"{self.best_model_base_prefix}_score_{validation_score:.4f}"
+                    best_model_save_prefix = f"{self.best_model_base_prefix}_{current_date}_ep{episode}_score_{validation_score:.4f}"
                     # self.agent.save_model(best_model_save_prefix) # REMOVED - Agent state is in checkpoint
                     # --- END MODIFICATION ---
                     logger.info(f"  Score: {validation_score:.4f}")
@@ -208,10 +214,14 @@ class RainbowTrainerModule:
             return None, None, None, None # Indicate failure
 
         try:
+            # Update env_config with the current episode file path
+            self.env_config["data_path"] = str(episode_file_path)
+            
+            # Create a TradingEnvConfig object
+            env_config_obj = TradingEnvConfig(**self.env_config)
+            
             env = TradingEnv(
-                data_path=str(episode_file_path),
-                window_size=self.agent.window_size,
-                **self.env_config
+                config=env_config_obj
             )
             obs, info = env.reset()
             assert isinstance(
@@ -262,8 +272,19 @@ class RainbowTrainerModule:
         try:
             next_obs, reward, done, _, info = env.step(action)
             # Basic validation of step outputs
+            if not isinstance(next_obs, dict):
+                logger.error(f"next_obs is not a dict: {type(next_obs)}")
+            if "market_data" not in next_obs:
+                logger.error("next_obs missing market_data")
+            if "account_state" not in next_obs:
+                logger.error("next_obs missing account_state")
+            if not isinstance(done, (bool, np.bool_)):
+                logger.error(f"done is not a bool: {type(done)}")
+            if not isinstance(info, dict):
+                logger.error(f"info is not a dict: {type(info)}")
+            
+            # Original assertions (modified)
             assert isinstance(next_obs, dict) and "market_data" in next_obs and "account_state" in next_obs
-            assert isinstance(reward, (float, np.float32, np.float64)) and not np.isnan(reward) and not np.isinf(reward)
             assert isinstance(done, (bool, np.bool_))
             assert isinstance(info, dict)
         except Exception as e:
@@ -283,11 +304,13 @@ class RainbowTrainerModule:
                 and total_train_steps % self.update_freq == 0
             ):
                 try:
+                    # Add gradient clipping
+                    torch.nn.utils.clip_grad_norm_(self.agent.network.parameters(), max_norm=1.0)
                     loss_value = self.agent.learn()
                 except Exception as e:
                     logger.error(f"!!! EXCEPTION during learning update at step {total_train_steps} !!!", exc_info=True)
                     done = True # Stop episode on learning error
-                reward = -10.0 # Penalize learning errors
+                reward = -11.0 # Penalize learning errors
 
         return next_obs, reward, done, info, action, loss_value
 
@@ -299,21 +322,28 @@ class RainbowTrainerModule:
         recent_step_rewards: deque,
         recent_losses: deque,
         action: int,
-        current_step_reward: float,
+        reward: float,
         info: dict
     ):
-        """Logs detailed progress within an episode."""
-        metrics = tracker.get_recent_metrics()
-        mean_recent_reward = np.mean(list(recent_step_rewards)) if recent_step_rewards else 0.0
-        mean_recent_loss = np.mean(list(recent_losses)) if recent_losses else 0.0
+        """Log step progress with detailed information."""
+        mean_reward = np.mean(recent_step_rewards) if recent_step_rewards else 0.0
+        mean_loss = np.mean(recent_losses) if recent_losses else 0.0
+        
+        # Calculate position value in USD
+        position_value = info["position"] * info["price"]
+        
         logger.info(
-            f"  Ep {episode+1} Step {steps_in_episode}: Port=${metrics['portfolio_value']:.2f}, "
-            f"Act={action:.0f}, StepRew={current_step_reward:.8f}, "
-            f"CumTxCost=${sum(tracker.transaction_costs):.2f}, "
-            f"MeanRew-{self.log_freq}={mean_recent_reward:.4f}, "
-            f"MeanLoss-{self.log_freq}={mean_recent_loss:.4f}, "
-            f"Price=${info.get('price', 0):.8f}, "
-            f"Balance=${info.get('balance', 0.0):.2f}, Position={info.get('position', 0.0):.4f}"
+            f"  Ep {episode} Step {steps_in_episode}: "
+            f"Port=${info['portfolio_value']:.2f}, "
+            f"Act={action}, "
+            f"StepRew={reward:.8f}, "
+            f"CumTxCost=${info['transaction_cost']:.2f}, "
+            f"MeanRew-{self.log_freq}={mean_reward:.4f}, "
+            f"MeanLoss-{self.log_freq}={mean_loss:.4f}, "
+            f"Price=${info['price']:.8f}, "
+            f"Balance=${info['balance']:.2f}, "
+            f"Position={info['position']:.4f}, "
+            f"PosValue=${position_value:.2f}"
         )
 
     def _log_episode_summary(
@@ -441,13 +471,11 @@ class RainbowTrainerModule:
 
             # --- ADDED: Check for non-numeric reward --- #
             error_occurred = False # Initialize error flag for this check
-            if not isinstance(reward, (float, np.float32, np.float64)):
-                logger.warning(f"Received non-numeric reward '{reward}' of type {type(reward)}. Treating as step error.")
-                reward = -10.0 # Assign penalty reward consistent with other errors
-                done = True # Terminate episode on this error
-                error_occurred = True # Set the error flag
-            # --- END ADDED --- #
-
+            if not isinstance(done, (bool, np.bool_)):
+                logger.error(f"done is not a bool: {type(done)}")
+            if not isinstance(info, dict):
+                logger.error(f"info is not a dict: {type(info)}")
+            
             # --- Assert info structure --- #
             assert isinstance(info, dict), "Validation: Info from env.step() must be a dict"
             assert "portfolio_value" in info, "Validation: Info missing portfolio_value"
@@ -460,7 +488,7 @@ class RainbowTrainerModule:
             logger.error(f"Error during validation step: {e}", exc_info=True) # Log with traceback
             # Return original obs, penalty reward, done=True, fallback info, dummy action, error=True
             fallback_info = self._get_fallback_info(obs, {}) # Simplified fallback info for error case
-            penalty_reward = -10.0
+            penalty_reward = -12.0
             dummy_action = -1 # Placeholder action for error case
             return obs, penalty_reward, True, fallback_info, dummy_action, True # True = error occurred
     # --- End Evaluation Step Helper ---
@@ -575,10 +603,14 @@ class RainbowTrainerModule:
         """Runs validation on a single file and returns collected metrics/results."""
         logger.info(f"--- VALIDATING ON FILE: {val_file.name} ---")
         try:
+            # Update env_config with the validation file path
+            self.env_config["data_path"] = str(val_file)
+            
+            # Create a TradingEnvConfig object
+            env_config_obj = TradingEnvConfig(**self.env_config)
+            
             env = TradingEnv(
-                data_path=str(val_file),
-                window_size=self.agent.window_size,
-                **self.env_config,  # Pass initial_balance, transaction_fee etc.
+                config=env_config_obj
             )
         except Exception as env_e:
             logger.error(f"Error creating environment for {val_file.name}: {env_e}", exc_info=True)
@@ -845,7 +877,7 @@ class RainbowTrainerModule:
             "error": "Environment step failed",
         }
 
-    def evaluate(self, env: TradingEnv, render=False):
+    def evaluate(self, env: TradingEnv):
         """Evaluate the agent on one episode with detailed logging, using the internal evaluation helper."""
         assert isinstance(
             env, TradingEnv

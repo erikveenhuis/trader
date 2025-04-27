@@ -72,10 +72,10 @@ def test_run_training_script_integration(tmp_path):
 
     # --- Set PYTHONPATH for the subprocess ---
     subprocess_env = os.environ.copy()
-    src_path = str(PROJECT_ROOT / "src")
-    # Prepend src path to existing PYTHONPATH or set it if it doesn't exist
+    # src_path = str(PROJECT_ROOT / "src") # Old: Use src path directly
+    # Prepend project root path to existing PYTHONPATH or set it if it doesn't exist
     subprocess_env["PYTHONPATH"] = (
-        f"{src_path}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
+        f"{str(PROJECT_ROOT)}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
     )
     print(f"Setting PYTHONPATH for subprocess: {subprocess_env['PYTHONPATH']}")
     # ----------------------------------------
@@ -195,9 +195,10 @@ def test_run_eval_script_integration(tmp_path):
     print(f"Working directory: {PROJECT_ROOT}")
 
     subprocess_env = os.environ.copy()
-    src_path = str(PROJECT_ROOT / "src")
+    # src_path = str(PROJECT_ROOT / "src") # Old: Use src path directly
+    # Prepend project root path to existing PYTHONPATH or set it if it doesn't exist
     subprocess_env["PYTHONPATH"] = (
-        f"{src_path}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
+        f"{str(PROJECT_ROOT)}{os.pathsep}{subprocess_env.get('PYTHONPATH', '')}"
     )
     print(f"Setting PYTHONPATH for subprocess: {subprocess_env['PYTHONPATH']}")
 

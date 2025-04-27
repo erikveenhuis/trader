@@ -3,13 +3,11 @@ import torch
 import numpy as np
 import os
 import shutil
-from unittest.mock import MagicMock
 from pathlib import Path
 
 # Use absolute imports from src
 from src.trainer import RainbowTrainerModule
-from src.agent import RainbowDQNAgent
-from src.env import TradingEnv
+from trading_env import TradingEnv
 from src.data import DataManager
 from src.constants import ACCOUNT_STATE_DIM
 
@@ -59,7 +57,7 @@ def default_config(tmp_path):
             "num_actions": 7,
             "lr": 1e-4,
             "gamma": 0.99,
-            "buffer_size": 1000,
+            "replay_buffer_size": 1000, # Changed from buffer_size to replay_buffer_size
             "batch_size": 4,
             "target_update_freq": 10,
             "n_steps": 3,
@@ -71,11 +69,17 @@ def default_config(tmp_path):
             "beta_frames": 100,
             "noisy_std": 0.1,
             "seed": 42,
+            # Add missing required parameters
+            "hidden_dim": 32,
+            "grad_clip_norm": 10.0,
+            "nhead": 4,
+            "num_encoder_layers": 1,
+            "dim_feedforward": 64,
+            "transformer_dropout": 0.0,
         },
         "environment": {
             "initial_balance": INITIAL_BALANCE,
-            "reward_cost_scale": 0.5,
-            "reward_pnl_scale": 1.0,
+            "reward_scale": 200.0,
             "transaction_fee": TRANSACTION_FEE,
         },
         "trainer": {
@@ -98,110 +102,28 @@ def default_config(tmp_path):
     }
 
 
-@pytest.fixture
-def mock_agent(default_config):
-    agent = MagicMock(spec=RainbowDQNAgent)
-    agent.network = MagicMock()
-    agent.target_network = MagicMock()
-    agent.optimizer = MagicMock()
-    # Configure attributes based on default_config where needed by trainer
-    agent.config = default_config["agent"]
-    agent.gamma = default_config["agent"]["gamma"]
-    agent.lr = default_config["agent"]["lr"]
-    agent.batch_size = default_config["agent"]["batch_size"]
-    agent.target_update_freq = default_config["agent"]["target_update_freq"]
-    agent.num_atoms = default_config["agent"]["num_atoms"]
-    agent.v_min = default_config["agent"]["v_min"]
-    agent.v_max = default_config["agent"]["v_max"]
-    agent.n_steps = default_config["agent"]["n_steps"]
-    # Mock buffer attributes needed by trainer
-    agent.buffer = MagicMock()
-    agent.buffer.alpha = default_config["agent"]["alpha"]
-    agent.buffer.beta_start = default_config["agent"]["beta_start"]
-    agent.buffer.__len__.return_value = agent.batch_size # Default to full enough
-    agent.select_action = MagicMock(return_value=0) # Default action, make mock
-    agent.learn = MagicMock(return_value=0.1) # Default loss, make mock
-    agent.save_model = MagicMock()
-    agent.load_model = MagicMock()
-    agent.total_steps = 0 # Initialize step count
-    agent.training_mode = True
-    agent.window_size = default_config["agent"]["window_size"]
-    agent.n_features = default_config["agent"]["n_features"]
-    agent.num_actions = default_config["agent"]["num_actions"]
-    # Mock methods called by trainer/tests
-    agent.act = MagicMock(return_value=agent.select_action.return_value)
-    agent.set_training_mode = MagicMock()
-    return agent
-
+# Mocking removed - Fixtures mock_agent, mock_data_manager, mock_env, and trainer are removed.
+# Tests relying on these fixtures will need to be updated or removed.
 
 @pytest.fixture
-def mock_data_manager(tmp_path):
-    # Create dummy files
-    processed_dir = tmp_path / "processed"
-    train_dir = processed_dir / "train"
-    val_dir = processed_dir / "validation"
-    test_dir = processed_dir / "test"
-    train_dir.mkdir(parents=True, exist_ok=True)
-    val_dir.mkdir(parents=True, exist_ok=True)
-    test_dir.mkdir(parents=True, exist_ok=True)
+def trainer(default_config, tmp_path):
+    """Fixture to provide a minimally configured RainbowTrainerModule instance."""
+    # Use the existing fixture data instead of creating new directories
+    fixtures_dir = Path("tests/fixtures")
+    data_manager = DataManager(str(fixtures_dir))
 
-    train_files = [train_dir / "train_data_1.csv", train_dir / "train_data_2.csv"]
-    val_files = [val_dir / "val_data_1.csv"]
-    test_files = [test_dir / "test_data_1.csv"]
-
-    for f in train_files + val_files + test_files:
-        create_dummy_csv(f, rows=WINDOW_SIZE + 20) # Ensure enough rows
-
-    # Mock DataManager methods
-    manager = MagicMock(spec=DataManager)
-    manager.base_dir = tmp_path # Base directory for the manager
-    manager.processed_dir = processed_dir # Point to the created processed dir
-    manager.train_dir = train_dir
-    manager.validation_dir = val_dir
-    manager.test_dir = test_dir
-    # Mock file retrieval methods
-    manager.get_training_files.return_value = train_files
-    manager.get_validation_files.return_value = val_files
-    manager.get_test_files.return_value = test_files
-    # Make get_random_training_file deterministic for tests
-    manager.get_random_training_file.return_value = train_files[0]
-    return manager
-
-
-@pytest.fixture
-def mock_env():
-    # Basic mock env, configure further in tests if needed
-    env = MagicMock(spec=TradingEnv)
-    env.reset.return_value = (
-        {"market_data": np.zeros((WINDOW_SIZE, 5)), "account_state": np.zeros(ACCOUNT_STATE_DIM)},
-        {"portfolio_value": INITIAL_BALANCE}
+    # Create a minimal valid RainbowDQNAgent instance
+    from src.agent import RainbowDQNAgent
+    mock_agent = RainbowDQNAgent(
+        config=default_config["agent"],
+        device="cpu"
     )
-    env.step.return_value = (
-        {"market_data": np.zeros((WINDOW_SIZE, 5)), "account_state": np.zeros(ACCOUNT_STATE_DIM)},
-        0.1, # reward
-        False, # done
-        False, # truncated
-        {"portfolio_value": INITIAL_BALANCE, "transaction_cost": 0.0, "step_transaction_cost": 0.0} # info
-    )
-    env.action_space = MagicMock()
-    env.action_space.sample.return_value = 0 # Return int
-    env.action_space.contains = MagicMock(return_value=True)
-    env.close = MagicMock()
-    env.data_len = WINDOW_SIZE + 10 # Default length
-    return env
 
-
-@pytest.fixture
-def trainer(mock_agent, mock_data_manager, default_config, tmp_path):
-    device = torch.device("cpu")
-    # Ensure model_dir in config uses the test's tmp_path
-    default_config["run"]["model_dir"] = str(tmp_path / "models")
-    # Ensure DataManager uses the tmp_path structure correctly
-    # Note: DataManager is mocked, but trainer might access config paths directly
+    # Create the trainer instance with a single config dict
     trainer_instance = RainbowTrainerModule(
         agent=mock_agent,
-        device=device,
-        data_manager=mock_data_manager, # Pass the mocked manager
-        config=default_config,
+        data_manager=data_manager,
+        device=torch.device("cpu"), # Use CPU for tests
+        config=default_config
     )
     return trainer_instance

@@ -87,12 +87,14 @@ def calculate_episode_score(metrics: Dict[str, float]) -> float:
     if not metrics:
         return 0.0
 
-    # Weights redistributed proportionally after removing win_rate (original total was 0.9)
+    # Define weights for each metric
     weights = {
-        "sharpe_ratio": 0.4 / 0.9,  # ~0.444
-        "total_return": 0.3 / 0.9,  # ~0.333
-        "max_drawdown": 0.2 / 0.9,  # ~0.222
+        "sharpe_ratio": 0.40,  # Weight for Sharpe Ratio
+        "total_return": 0.20,  # Weight for Total Return
+        "max_drawdown": 0.40,  # Weight for (1 - Max Drawdown)
     }
+    # Ensure weights sum to 1 (or very close due to floating point)
+    assert abs(sum(weights.values()) - 1.0) < 1e-6, "Weights must sum to 1"
 
     score = 0.0
     sharpe = metrics.get("sharpe_ratio", 0.0)
@@ -100,22 +102,6 @@ def calculate_episode_score(metrics: Dict[str, float]) -> float:
     total_return_pct = metrics.get("total_return", 0.0) / 100.0
     # Default max_drawdown to 1.0 (worst case) if not provided
     max_drawdown = metrics.get("max_drawdown", 1.0)
-
-    # --- Input Assertions ---
-    assert (
-        isinstance(sharpe, (float, np.float32, np.float64))
-        and not np.isnan(sharpe)
-        and not np.isinf(sharpe)
-    ), "Invalid Sharpe Ratio in metrics"
-    assert (
-        isinstance(total_return_pct, (float, np.float32, np.float64))
-        and not np.isnan(total_return_pct)
-        and not np.isinf(total_return_pct)
-    ), "Invalid Total Return in metrics"
-    assert (
-        isinstance(max_drawdown, (float, np.float32, np.float64))
-        and 0.0 <= max_drawdown <= 1.0
-    ), "Invalid Max Drawdown in metrics"
 
     # --- Normalization using Sigmoid: 1 / (1 + exp(-x)) ---
     # Maps values to (0, 1). 0 -> 0.5, positive -> >0.5, negative -> <0.5

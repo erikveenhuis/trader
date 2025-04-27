@@ -13,3 +13,8 @@ data/
 *.csv
 *.csv.gz
 .ruff_cache/
+build/
+dist/
+htmlcov/
+.mypy_cache/
+.ruff_cache/

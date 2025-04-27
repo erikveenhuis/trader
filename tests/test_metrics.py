@@ -7,21 +7,13 @@ import sys
 # if src_path not in sys.path:
 #     sys.path.insert(0, src_path)
 
-try:
-    # Use src package prefix
-    from src.metrics import (
-        calculate_sharpe_ratio,
-        calculate_max_drawdown,
-        calculate_win_rate,
-        calculate_avg_trade_return,
-        calculate_composite_score,
-        PerformanceTracker,
-    )
-except ImportError as e:
-    print(f"Failed to import required modules: {e}")
-    print(f"Current sys.path: {sys.path}")
-    pytest.skip("Skipping metrics tests due to import error.", allow_module_level=True)
-    # raise e # Re-raise the exception to see the full traceback
+# Direct import from src package
+from src.metrics import (
+    calculate_sharpe_ratio,
+    calculate_max_drawdown,
+    calculate_avg_trade_return,
+    PerformanceTracker,
+)
 
 # --- Test Individual Metric Functions ---
 
@@ -92,29 +84,6 @@ def test_max_drawdown_initial_dip():
     assert np.isclose(calculate_max_drawdown(values), expected_max_dd)
 
 
-# Win Rate Tests
-@pytest.mark.unittest
-def test_win_rate_empty():
-    assert calculate_win_rate([]) == 0.0
-
-
-@pytest.mark.unittest
-def test_win_rate_all_wins():
-    assert calculate_win_rate([0.01, 0.05, 0.02]) == 1.0
-
-
-@pytest.mark.unittest
-def test_win_rate_all_losses():
-    assert calculate_win_rate([-0.01, -0.05, -0.02]) == 0.0
-
-
-@pytest.mark.unittest
-def test_win_rate_mixed():
-    returns = [0.01, -0.02, 0.03, 0.0, -0.01]  # Zero is not a win
-    expected_win_rate = 2 / 5
-    assert np.isclose(calculate_win_rate(returns), expected_win_rate)
-
-
 # Avg Trade Return Tests
 @pytest.mark.unittest
 def test_avg_trade_return_empty():
@@ -126,38 +95,6 @@ def test_avg_trade_return_simple():
     returns = [0.01, -0.02, 0.03, 0.0, -0.01]
     expected_avg = np.mean(returns)
     assert np.isclose(calculate_avg_trade_return(returns), expected_avg)
-
-
-# Composite Score Tests
-@pytest.mark.unittest
-def test_composite_score_empty():
-    assert calculate_composite_score({}) == 0.0
-
-
-@pytest.mark.unittest
-def test_composite_score_basic():
-    metrics = {
-        "sharpe_ratio": 1.5,
-        "total_return": 25.0,  # 25%
-        "win_rate": 0.6,
-        "max_drawdown": 0.15,  # 15%
-    }
-    # score = sharpe*0.4 + return_pct*0.3 + win_rate*0.1 + (1-drawdown)*0.2
-    expected_score = (1.5 * 0.4) + (0.25 * 0.3) + (0.6 * 0.1) + ((1 - 0.15) * 0.2)
-    # expected_score = 0.6 + 0.075 + 0.06 + (0.85 * 0.2) = 0.6 + 0.075 + 0.06 + 0.17 = 0.905
-    assert np.isclose(calculate_composite_score(metrics), expected_score)
-
-
-@pytest.mark.unittest
-def test_composite_score_missing_keys():
-    metrics = {
-        "sharpe_ratio": 1.0,
-        "total_return": 10.0,
-    }
-    # Use defaults: win_rate=0.0, max_drawdown=1.0
-    expected_score = (1.0 * 0.4) + (0.10 * 0.3) + (0.0 * 0.1) + ((1 - 1.0) * 0.2)
-    # expected_score = 0.4 + 0.03 + 0.0 + 0.0 = 0.43
-    assert np.isclose(calculate_composite_score(metrics), expected_score)
 
 
 # --- Test PerformanceTracker Class ---
@@ -228,7 +165,6 @@ def test_tracker_get_metrics_full(tracker):
     expected_return_pct = (10150.0 / 10000.0 - 1) * 100
     expected_sharpe = calculate_sharpe_ratio(tracker.returns)
     expected_max_dd = calculate_max_drawdown(tracker.portfolio_values)
-    expected_win_rate = calculate_win_rate(tracker.returns)
     expected_avg_return = calculate_avg_trade_return(tracker.returns)
     expected_tx_costs = 3.0
     expected_avg_reward = np.mean([0.0, 5.0, -2.0, 7.0, -1.0])
@@ -237,7 +173,6 @@ def test_tracker_get_metrics_full(tracker):
     assert np.isclose(metrics["total_return"], expected_return_pct)
     assert np.isclose(metrics["sharpe_ratio"], expected_sharpe)
     assert np.isclose(metrics["max_drawdown"], expected_max_dd)
-    assert np.isclose(metrics["win_rate"], expected_win_rate)
     assert np.isclose(metrics["avg_trade_return"], expected_avg_return)
     assert np.isclose(metrics["transaction_costs"], expected_tx_costs)
     assert np.isclose(metrics["avg_reward"], expected_avg_reward)
@@ -271,7 +206,6 @@ def test_tracker_get_recent_metrics(tracker):
     expected_return_pct = (recent_portfolio[-1] / recent_portfolio[0] - 1) * 100
     expected_sharpe = calculate_sharpe_ratio(recent_returns)
     expected_max_dd = calculate_max_drawdown(recent_portfolio)
-    expected_win_rate = calculate_win_rate(recent_returns)
     expected_avg_return = calculate_avg_trade_return(recent_returns)
     expected_tx_costs = sum(recent_costs)
     expected_avg_reward = np.mean(recent_rewards)
@@ -280,7 +214,6 @@ def test_tracker_get_recent_metrics(tracker):
     assert np.isclose(recent_metrics["total_return"], expected_return_pct)
     assert np.isclose(recent_metrics["sharpe_ratio"], expected_sharpe)
     assert np.isclose(recent_metrics["max_drawdown"], expected_max_dd)
-    assert np.isclose(recent_metrics["win_rate"], expected_win_rate)
     assert np.isclose(recent_metrics["avg_trade_return"], expected_avg_return)
     assert np.isclose(recent_metrics["transaction_costs"], expected_tx_costs)
     assert np.isclose(recent_metrics["avg_reward"], expected_avg_reward)

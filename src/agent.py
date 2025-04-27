@@ -796,7 +796,10 @@ class RainbowDQNAgent:
         optimizer_path = f"{path_prefix}_optimizer.pth"
         misc_path = f"{path_prefix}_misc.yaml"
 
-        loaded_successfully = True
+        # Track success of each component separately
+        network_loaded = False
+        optimizer_loaded = False
+        misc_loaded = False
 
         # Load network state
         if os.path.exists(network_path):
@@ -811,14 +814,13 @@ class RainbowDQNAgent:
                 self.target_network.to(self.device)
                 self.target_network.eval()
                 logger.info("Network state loaded.")
+                network_loaded = True
             except Exception as e:
                 logger.error(f"Error loading network state: {e}")
-                loaded_successfully = False
         else:
             logger.warning(f"Network state file not found: {network_path}")
-            loaded_successfully = False
 
-        # Load optimizer state
+        # Load optimizer state (regardless of network loading success)
         if os.path.exists(optimizer_path):
             logger.info(f"Loading optimizer state from: {optimizer_path}")
             try:
@@ -831,44 +833,46 @@ class RainbowDQNAgent:
                         if isinstance(v, torch.Tensor):
                             state[k] = v.to(self.device)
                 logger.info("Optimizer state loaded.")
+                optimizer_loaded = True
             except Exception as e:
                 logger.error(f"Error loading optimizer state: {e}")
-                loaded_successfully = False
         else:
             logger.warning(f"Optimizer state file not found: {optimizer_path}")
-            loaded_successfully = False
 
         # Load miscellaneous state (total_steps, potentially config)
+        config_mismatch = False
         if os.path.exists(misc_path):
             logger.info(f"Loading miscellaneous state from: {misc_path}")
             try:
                 with open(misc_path, 'r') as f:
                     misc_data = yaml.safe_load(f)
+                
                 # Load total_steps for standalone model loading
                 if 'total_steps' in misc_data:
                     self.total_steps = misc_data['total_steps']
                     logger.info(f"Miscellaneous data loaded (total_steps applied: {self.total_steps}).")
+                    misc_loaded = True
                 else:
                     logger.warning("Miscellaneous data loaded but 'total_steps' not found.")
 
                 # Check for config compatibility
                 if 'config' in misc_data:
                     if misc_data['config'] != self.config:
+                        config_mismatch = True
                         logger.warning("Configuration mismatch detected: Loaded model config differs from current agent config.")
                 else:
                     logger.warning("Miscellaneous data loaded but 'config' key not found for comparison.")
-
             except Exception as e:
                 logger.error(f"Error loading miscellaneous state: {e}")
-                loaded_successfully = False
         else:
             logger.warning(f"Miscellaneous state file not found: {misc_path}")
-            loaded_successfully = False
 
+        loaded_successfully = network_loaded and optimizer_loaded and misc_loaded and not config_mismatch
         if loaded_successfully:
-            logger.info(f"Model loaded from prefix {path_prefix}")
+            logger.info(f"Model loaded successfully from prefix {path_prefix}")
         else:
             logger.warning(f"Model loading from prefix {path_prefix} encountered issues.")
+        
         return loaded_successfully
 
     # --- NEW METHOD for loading state from unified checkpoint ---
@@ -952,11 +956,3 @@ class RainbowDQNAgent:
                 self.network.eval()
                 # Ensure target is also in eval mode (should be already, but safe)
                 self.target_network.eval()
-
-
-# --- End: Rainbow DQN Agent ---
-
-# --- Remove Old DDPG Agent and OUNoise --- #
-# (Ensure old classes like TransformerTraderAgent and OUNoise are removed if they existed)
-# class OUNoise: ...
-# class TransformerTraderAgent: ...
