@@ -140,6 +140,9 @@ class RainbowDQNAgent:
         )
         # For N-step returns
         self.n_step_buffer = deque(maxlen=self.n_steps)
+        # --- ADDED: Deque for n-step reward logging window ---
+        self.n_step_reward_window = deque(maxlen=60) 
+        # --- END ADDED ---
 
         self.training_mode = True  # Start in training mode by default
         self.total_steps = (
@@ -334,6 +337,12 @@ class RainbowDQNAgent:
             state_t, action_t, n_step_reward, next_state_tn, done_tn = (
                 self._get_n_step_info()
             )
+            # --- REMOVED: Single reward log ---
+            # logger.info(f"Calculated n_step_reward: {n_step_reward}")
+            # --- END REMOVED ---
+            # --- ADDED: Append reward to window deque ---
+            self.n_step_reward_window.append(n_step_reward)
+            # --- END ADDED ---
             market_data_t, account_state_t = state_t
             next_market_tn, next_account_tn = next_state_tn
 
@@ -766,6 +775,18 @@ class RainbowDQNAgent:
         logger.debug(
             f"Step: {self.total_steps}, Loss: {loss_item:.4f}, PER Beta: {beta:.4f}"
         )
+
+        # --- ADDED: Log min/max of n-step reward window periodically ---
+        # Log every 60 agent learning steps if the window has data
+        if self.total_steps % 60 == 0 and len(self.n_step_reward_window) > 0:
+            try:
+                min_r = min(self.n_step_reward_window)
+                max_r = max(self.n_step_reward_window)
+                logger.info(f"N-Step Reward Window (last {len(self.n_step_reward_window)} learns): Min={min_r:.4f}, Max={max_r:.4f}")
+            except ValueError:
+                # Should not happen if len > 0, but safeguard
+                logger.warning("Could not calculate min/max for n-step reward window.")
+        # --- END ADDED ---
 
         return loss_item  # Return loss for external logging/monitoring
 
