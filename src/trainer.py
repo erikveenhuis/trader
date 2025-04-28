@@ -310,7 +310,6 @@ class RainbowTrainerModule:
                 except Exception as e:
                     logger.error(f"!!! EXCEPTION during learning update at step {total_train_steps} !!!", exc_info=True)
                     done = True # Stop episode on learning error
-                reward = -11.0 # Penalize learning errors
 
         return next_obs, reward, done, info, action, loss_value
 

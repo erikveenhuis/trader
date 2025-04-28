@@ -26,13 +26,24 @@
     ```
 2.  **Create and activate a virtual environment (recommended):**
     ```bash
-    python3 -m venv venv
+    # Ensure you are using the desired Python version (e.g., 3.13)
+    py -3.13 -m venv venv 
+
+    # On Linux/macOS:
     source venv/bin/activate 
-    # On Windows use `venv\Scripts\activate`
+    
+    # On Windows (PowerShell):
+    .\venv\Scripts\activate
+    
+    # On Windows (Command Prompt):
+    venv\Scripts\activate.bat
     ```
 3.  **Install dependencies:**
+    *Note: This project uses `pyproject.toml` for dependency management.*
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
+    # To install optional development dependencies:
+    # pip install -e ".[dev]" 
     ```
 
 ## Running Data Processing

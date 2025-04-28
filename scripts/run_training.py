@@ -2,12 +2,17 @@
 # Main training script for transformer trader (Rainbow DQN version)
 
 import os
+import sys # Added sys module
 import logging
 from pathlib import Path
 import torch
 import numpy as np
 import yaml  # Added for config loading
 import argparse  # Added for command-line arguments
+
+# Add project root to the Python path
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
 
 from trading_env import TradingEnv, TradingEnvConfig # Import config class again
 from src.trainer import RainbowTrainerModule

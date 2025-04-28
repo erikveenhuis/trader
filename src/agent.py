@@ -91,17 +91,25 @@ class RainbowDQNAgent:
         self.target_network = RainbowNetwork(config=self.config, device=self.device).to(
             self.device
         )
-        # Wrap models with torch.compile for potential speedup - REMOVED due to MPS backend errors
+
+        # # Check if PyTorch version >= 2.0 to use torch.compile
         # if int(torch.__version__.split('.')[0]) >= 2:
         #     logger.info("Applying torch.compile to network and target_network.")
         #     # Add error handling in case compile fails on specific setups
         #     try:
-        #         # Try a less aggressive compilation mode first
-        #         self.network = torch.compile(self.network, mode="reduce-overhead")
-        #         self.target_network = torch.compile(self.target_network, mode="reduce-overhead")
-        #         logger.info("torch.compile(mode='reduce-overhead') applied successfully.")
+        #         # Try the default compilation mode first
+        #         self.network = torch.compile(self.network)
+        #         self.target_network = torch.compile(self.target_network)
+        #         logger.info("torch.compile applied successfully with default mode.")
+        #     except ImportError as imp_err: # Catch potential import errors if compile isn't fully set up
+        #          logger.warning(f"torch.compile skipped due to potential import issue: {imp_err}. Proceeding without compilation.")
         #     except Exception as e:
-        #         logger.warning(f"torch.compile failed: {e}. Proceeding without compilation.")
+        #          # Check if it's the TritonMissing error specifically
+        #          # Check class name string as direct import might fail if torch._inductor isn't available
+        #          if "TritonMissing" in str(e.__class__):
+        #              logger.warning(f"torch.compile failed as Triton backend is not available (common on non-Linux/CUDA setups): {e}. Proceeding without compilation.")
+        #          else:
+        #              logger.warning(f"torch.compile failed with an unexpected error: {e}. Proceeding without compilation.")
         # else:
         #     logger.warning("torch version < 2.0, torch.compile not available.")
 
