@@ -5,6 +5,7 @@ import os
 import sys
 from pathlib import Path
 from trading_env import TradingEnv, TradingEnvConfig  # Use installed package
+from torch.cuda.amp import GradScaler
 from .agent import RainbowDQNAgent  # Use relative import
 from .data import DataManager  # Use relative import
 from .metrics import (
@@ -30,6 +31,7 @@ class RainbowTrainerModule:
         device: torch.device,
         data_manager: DataManager,
         config: dict,
+        scaler: GradScaler | None = None,
     ):
         assert isinstance(
             agent, RainbowDQNAgent
@@ -47,6 +49,7 @@ class RainbowTrainerModule:
         self.env_config = config["environment"]
         self.trainer_config = config["trainer"]
         self.run_config = config.get("run", {})
+        self.scaler = scaler
         self.best_validation_metric = -np.inf
         # Adjust path prefix for Rainbow models
         self.best_model_base_prefix = str(
@@ -131,6 +134,7 @@ class RainbowTrainerModule:
             "network_state_dict": self.agent.network.state_dict() if self.agent.network else None,
             "target_network_state_dict": self.agent.target_network.state_dict() if self.agent.target_network else None,
             "optimizer_state_dict": self.agent.optimizer.state_dict() if self.agent.optimizer else None,
+            "scaler_state_dict": self.scaler.state_dict() if self.scaler else None,
             # --- END ADDED Agent State ---
         }
 

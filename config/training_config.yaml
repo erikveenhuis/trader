@@ -7,8 +7,8 @@ agent:
   gamma: 0.99
   lr: 0.0002 # Learning rate
   batch_size: 128
-  replay_buffer_size: 100000
-  target_update_freq: 250 # Steps to update target network
+  replay_buffer_size: 500000
+  target_update_freq: 5000 # Steps to update target network
 
   # Network architecture
   window_size: 60 # Window size for the agent same as the environment

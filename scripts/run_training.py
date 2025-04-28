@@ -9,6 +9,9 @@ import torch
 import numpy as np
 import yaml  # Added for config loading
 import argparse  # Added for command-line arguments
+# --- Add AMP imports ---
+from torch.cuda.amp import GradScaler, autocast
+# ---------------------
 
 # Add project root to the Python path
 project_root = Path(__file__).resolve().parent.parent
@@ -71,6 +74,13 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
         device = torch.device("cpu")
     logger.info(f"Using {device} device")
 
+    # --- Initialize GradScaler for AMP if using CUDA ---
+    scaler = None
+    if device.type == 'cuda':
+        scaler = GradScaler()
+        logger.info("Initialized GradScaler for Automatic Mixed Precision (AMP).")
+    # --------------------------------------------------
+
     # Agent class is fixed for this script
     AgentClass = RainbowDQNAgent
     # --- Add seed to agent_config --- # Added
@@ -128,7 +138,8 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
                          # Decide if this should be an error or just a warning
                          # agent_config = loaded_agent_config # Optionally force use of loaded config
                     
-                    agent = AgentClass(config=agent_config, device=device)
+                    # Pass scaler to Agent constructor
+                    agent = AgentClass(config=agent_config, device=device, scaler=scaler)
                     logger.info("Agent instantiated. Attempting to load agent state from checkpoint...")
                     agent_loaded = agent.load_state(loaded_checkpoint) # Pass the whole dict
 
@@ -164,7 +175,8 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
     # --- Ensure agent is instantiated if not loaded during resume attempt --- 
     if not agent_loaded:
          logger.info("Instantiating fresh agent.")
-         agent = AgentClass(config=agent_config, device=device) 
+         # Pass scaler to Agent constructor
+         agent = AgentClass(config=agent_config, device=device, scaler=scaler) 
 
     assert isinstance(agent, RainbowDQNAgent), "Agent not instantiated correctly"
     logger.info(
@@ -177,6 +189,7 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
         device=device,
         data_manager=data_manager,
         config=config,  # Pass the full config to the trainer
+        scaler=scaler # Pass scaler to Trainer constructor
         # Remove handler passing, as root logger handles it now
         # train_log_handler=train_log_handler,
         # validation_log_handler=validation_log_handler
@@ -350,7 +363,8 @@ def main():  # Remove default config_path
                 f"Added seed {agent_config['seed']} to agent config for evaluation."
             )
 
-        eval_agent = RainbowDQNAgent(config=agent_config, device=device)
+        # Pass scaler=None during evaluation as AMP is typically for training
+        eval_agent = RainbowDQNAgent(config=agent_config, device=device, scaler=None)
         assert isinstance(
             eval_agent, RainbowDQNAgent
         ), "Failed to instantiate agent for evaluation"
@@ -367,8 +381,9 @@ def main():  # Remove default config_path
         eval_agent.set_training_mode(False)
 
         # Pass full config to trainer for evaluation setup (if needed)
+        # Pass scaler=None to trainer during evaluation
         eval_trainer = RainbowTrainerModule(
-            agent=eval_agent, device=device, data_manager=data_manager, config=config
+            agent=eval_agent, device=device, data_manager=data_manager, config=config, scaler=None
         )
         
         # Run evaluation - internal asserts will check inputs

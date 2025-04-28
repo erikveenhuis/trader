@@ -5,6 +5,7 @@ import numpy as np
 import time
 import random
 from collections import deque
+from torch.cuda.amp import GradScaler, autocast
 from .buffer import PrioritizedReplayBuffer
 from .model import RainbowNetwork
 import os  # Added for save/load path handling
@@ -26,7 +27,7 @@ class RainbowDQNAgent:
     - Noisy Nets for exploration
     """
 
-    def __init__(self, config: dict, device: str = "cuda"):
+    def __init__(self, config: dict, device: str = "cuda", scaler: GradScaler | None = None):
         """
         Initializes the Rainbow DQN Agent.
 
@@ -37,6 +38,7 @@ class RainbowDQNAgent:
                            beta_frames, n_steps, window_size, n_features, hidden_dim,
                            num_actions, grad_clip_norm, debug (optional).
             device (str): The device to run the agent on ('cuda' or 'cpu').
+            scaler (GradScaler | None): Optional GradScaler for AMP.
         """
         self.config = config
         self.device = device
@@ -61,6 +63,7 @@ class RainbowDQNAgent:
         self.grad_clip_norm = config["grad_clip_norm"]
         # Optional flags can still use .get()
         self.debug_mode = config.get("debug", False)
+        self.scaler = scaler # Store the scaler instance
 
         # Setup seeds
         np.random.seed(self.seed)
@@ -69,10 +72,14 @@ class RainbowDQNAgent:
         if self.device == "cuda" and torch.cuda.is_available():
             torch.cuda.manual_seed(self.seed)
             torch.cuda.manual_seed_all(self.seed)  # for multi-GPU
-            logger.info("CUDA seed set.")
+            logger.info(f"CUDA seed set. AMP Enabled: {self.scaler is not None}")
         elif self.device == "cuda":
             logger.warning("CUDA device requested but not available. Using CPU.")
             self.device = "cpu"
+            self.scaler = None # Ensure scaler is None if not on CUDA
+            logger.info(f"Agent on CPU. AMP Disabled.")
+        else:
+            logger.info(f"Agent on CPU. AMP Disabled.")
 
         logger.info(f"Initializing RainbowDQNAgent on {self.device}")
         logger.info(f"Config: {config}")  # Log the entire config
@@ -680,9 +687,18 @@ class RainbowDQNAgent:
             self.batch_size,
         ), "TD errors tensor from _compute_loss has wrong shape/type"
 
+        # Check if AMP is enabled (scaler exists)
+        amp_enabled = self.scaler is not None and self.device == 'cuda'
+
         # Optimize the model
         self.optimizer.zero_grad()
-        loss.backward()
+
+        if amp_enabled:
+            # Scale loss and backpropagate
+            self.scaler.scale(loss).backward()
+        else:
+            # Standard backward pass
+            loss.backward()
 
         if self.debug_mode:
             for p in self.network.parameters():
@@ -692,9 +708,16 @@ class RainbowDQNAgent:
                     )
 
         # Clip gradients
-        torch.nn.utils.clip_grad_norm_(
-            self.network.parameters(), max_norm=self.grad_clip_norm
-        )
+        if amp_enabled:
+            # Unscale gradients before clipping
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                self.network.parameters(), max_norm=self.grad_clip_norm
+            )
+        else:
+            torch.nn.utils.clip_grad_norm_(
+                self.network.parameters(), max_norm=self.grad_clip_norm
+            )
 
         if self.debug_mode:
             for p in self.network.parameters():
@@ -703,7 +726,14 @@ class RainbowDQNAgent:
                         f"NaN or Inf detected in gradients AFTER clipping (Max Norm: {self.grad_clip_norm}) for parameter: {p.shape}"
                     )
 
-        self.optimizer.step()
+        if amp_enabled:
+            # Scaler steps the optimizer
+            self.scaler.step(self.optimizer)
+            # Update scaler for next iteration
+            self.scaler.update()
+        else:
+            # Standard optimizer step
+            self.optimizer.step()
 
         # Update priorities in PER using the TD errors (ensure they are positive)
         # Add a small epsilon to prevent priorities of 0
@@ -939,6 +969,17 @@ class RainbowDQNAgent:
             else:
                 logger.warning("Agent state dict missing 'agent_config'.")
                 # loaded_successfully = False # Optional: make config matching mandatory
+
+            # Load Scaler State (if applicable)
+            if 'scaler_state_dict' in agent_state_dict:
+                if self.scaler:
+                    self.scaler.load_state_dict(agent_state_dict['scaler_state_dict'])
+                    logger.info("GradScaler state loaded from dict.")
+                else:
+                    logger.warning("Scaler state found in checkpoint, but agent has no scaler (CPU or AMP disabled). Skipping scaler load.")
+            elif self.scaler:
+                # This is only a warning if starting fresh, but could be an issue if resuming a run that *used* AMP
+                logger.warning("Agent has a scaler, but no scaler state found in checkpoint dict. Scaler starts fresh.")
 
         except Exception as e:
             logger.error(f"Error loading agent state from dictionary: {e}", exc_info=True)
