@@ -1,0 +1,13 @@
+raw_dir: data/raw
+extracted_dir: data/extracted
+max_workers: 12
+clear_output: true
+filter_usd_only: true
+filter_complete_days: true
+exact_datapoints: 1440
+year_filter: null  # or e.g., '2023' 
+filter_anomalies: true
+anomaly_std_dev_threshold: 4.0 # Common values are 3.0 to 5.0
+exclude_tickers:
+  - UST-USD
+  - AMP-USD

@@ -19,9 +19,9 @@ from src.utils.logging_config import setup_logging, get_logger
 
 # Import shared functions/constants
 try:
-    from data_utils import clear_directory, calculate_return  # Changed import to be relative
+    from .data_utils import clear_directory, calculate_return
 except ImportError:
-    logging.error("Could not import utility functions from data_utils. Ensure the file exists in the same directory.")
+    logging.error("Could not import utility functions from .data_utils. Ensure data_utils.py exists in the same directory.")
     sys.exit(1)
 
 # Get logger instance
@@ -135,6 +135,28 @@ def perform_train_val_test_split(
     if skipped_calc_count > 0:
         logger.warning(f"Skipped return calculation for {skipped_calc_count} files due to errors or invalid data.")
 
+    # --- Log Top/Bottom 5 Returns --- 
+    if returns_map:
+        logger.info("--- Top/Bottom 5 Calculated Returns (for Train/Val pool) ---")
+        returns_map.sort(key=lambda x: x[1]) # Ensure sorted by return
+        
+        # Bottom 5
+        bottom_5 = returns_map[:5]
+        logger.info("Bottom 5 Returns:")
+        for file_path, ret_val in bottom_5:
+            logger.info(f"  - {file_path.name}: {ret_val:.6f}")
+            
+        # Top 5
+        top_5 = returns_map[-5:]
+        logger.info("Top 5 Returns:")
+        # Iterate in reverse to show highest first
+        for file_path, ret_val in reversed(top_5):
+            logger.info(f"  - {file_path.name}: {ret_val:.6f}")
+        logger.info("----------------------------------------------------------")
+    else:
+        logger.warning("No returns calculated, cannot show top/bottom.")
+        # Fallback or error handling logic follows
+
     if not returns_map:
          logger.error("Could not calculate returns for any potential train/val files. Cannot select validation set based on returns.")
          # Fallback: Randomly select validation set
@@ -225,36 +247,37 @@ def perform_train_val_test_split(
             try:
                 if file_path.exists(): # Check if source exists
                      dest_file = dest_path / file_path.name
-                     shutil.move(str(file_path), str(dest_file))
+                     # Change move to copy2 to preserve source files
+                     shutil.copy2(str(file_path), str(dest_file))
                      count += 1
                 else:
-                    logger.warning(f"Source file {file_path} not found for moving. Check if input dir overlaps with cleared output.")
+                    logger.warning(f"Source file {file_path} not found for copying. Check if input dir overlaps with cleared output.") # Changed wording
                     err_count += 1
             except Exception as e:
-                logger.error(f"Error moving file {file_path.name} to {dest_path}: {e}")
+                logger.error(f"Error copying file {file_path.name} to {dest_path}: {e}") # Changed wording
                 err_count += 1
         return count, err_count
 
-    logger.info(f"Moving {n_train} files to {train_path}...")
+    logger.info(f"Copying {n_train} files to {train_path}...") # Changed wording
     moved, errors = move_files(final_train_files, train_path)
     moved_train += moved
     errors_moving += errors
 
-    logger.info(f"Moving {n_val} files to {val_path}...")
+    logger.info(f"Copying {n_val} files to {val_path}...") # Changed wording
     moved, errors = move_files(validation_files, val_path)
     moved_val += moved
     errors_moving += errors
 
-    logger.info(f"Moving {n_test} files to {test_path}...")
+    logger.info(f"Copying {n_test} files to {test_path}...") # Changed wording
     moved, errors = move_files(test_files, test_path)
     moved_test += moved
     errors_moving += errors
 
     logger.info(
-        f"File moving complete. Moved {moved_train}/{n_train} to Train, {moved_val}/{n_val} to Validation, {moved_test}/{n_test} to Test."
+        f"File copying complete. Copied {moved_train}/{n_train} to Train, {moved_val}/{n_val} to Validation, {moved_test}/{n_test} to Test." # Changed wording
     )
     if errors_moving > 0:
-        logger.error(f"{errors_moving} errors occurred during file moving.")
+        logger.error(f"{errors_moving} errors occurred during file copying.") # Changed wording
 
 
 def run_split(
