@@ -6,8 +6,10 @@ import torch.nn.functional as F
 from typing import Dict, Any  # Added for type hinting
 from .buffer import Experience
 from .constants import ACCOUNT_STATE_DIM
+from .utils.logging_config import get_logger
 
-logger = logging.getLogger("TransformerModel")
+# Get logger instance
+logger = get_logger("TransformerModel")
 
 
 # --- Start: Noisy Linear Layer ---

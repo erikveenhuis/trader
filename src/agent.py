@@ -12,8 +12,10 @@ import os  # Added for save/load path handling
 from .utils.utils import set_seeds
 import yaml  # Added for config load/save
 from .constants import ACCOUNT_STATE_DIM # Import constant
+from .utils.logging_config import get_logger
 
-logger = logging.getLogger("Agent")
+# Get logger instance
+logger = get_logger("Agent")
 
 # --- Start: Rainbow DQN Agent ---
 class RainbowDQNAgent:

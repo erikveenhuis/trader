@@ -20,7 +20,8 @@ sys.path.insert(0, str(project_root))
 from trading_env import TradingEnv, TradingEnvConfig # Import config class again
 from src.trainer import RainbowTrainerModule
 from src.agent import RainbowDQNAgent
-from src.utils.utils import setup_global_logging, set_seeds, get_random_data_file
+from src.utils.logging_config import setup_logging, get_logger
+from src.utils.utils import set_seeds, get_random_data_file
 from src.data import DataManager
 from src.utils.checkpoint_utils import find_latest_checkpoint, load_checkpoint
 from src.evaluation import evaluate_on_test_data
@@ -38,12 +39,24 @@ if torch.cuda.is_available():
 
 # --- Standard Logging Setup ---
 log_file = Path("logs") / "training.log"
-log_file.parent.mkdir(exist_ok=True)
-setup_global_logging(log_file_path=log_file, root_level=logging.INFO)
+setup_logging(
+    log_file_path=log_file,
+    root_level=logging.INFO,
+    level_overrides={
+        "Main": logging.INFO,
+        "Trainer": logging.INFO,
+        "Agent": logging.INFO,
+        "DataManager": logging.INFO,
+        "TransformerModel": logging.INFO,
+        "Buffer": logging.INFO,
+        "Metrics": logging.INFO,
+        "Evaluation": logging.INFO
+    }
+)
 # -----------------------------
 
-# Define loggers using their names (only needed if you want to get it explicitly)
-logger = logging.getLogger("Main")
+# Get logger instance
+logger = get_logger("Main")
 
 
 def run_training(config: dict, data_manager: DataManager, resume_training_flag: bool):
@@ -227,6 +240,8 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
     logger.info("=============================================")
 
     # --- Run Training ---
+    logger.debug(f"Agent config: {agent_config}")
+    logger.debug(f"Environment config: {env_config}")
     trainer.train(
         # env=initial_env, # Removed argument
         num_episodes=num_episodes,

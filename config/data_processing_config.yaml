@@ -8,15 +8,24 @@ output_dir: data/processed
 max_workers: 12
 filter_complete_days: true
 clear_output: true
+# Filter to keep only tickers ending with -USD
 filter_usd_only: true
-year_filter: null # Set to a string like "2025" to filter, or null/None to process all
+# Optional: Specify a year (YYYY) to process only files from that year. Set to null or remove to process all.
+# year_filter: 2023
+year_filter: null
+
+# --- Anomaly Detection ---
+# Filter out tickers/days containing price anomalies (based on std dev)
+filter_anomalies: true
+# Number of standard deviations from the mean to consider a price an anomaly
+anomaly_std_dev_threshold: 4.0 # Common values are 3.0 to 5.0
 
 # Splitting options
 perform_split: true
 # train_ratio: 0.9 # Proportion of time-series data for training (DEPRECATED)
 # val_ratio: 0.05 # Proportion of time-series data for validation (DEPRECATED)
-test_ratio: 0.10 # Proportion of files for the final test set (random split)
-validation_size: 20 # Number of files to select for validation set from initial train pool
+test_ratio: 0.1 # Proportion of files for the final test set (random split)
+validation_size: 51 # Number of files to select for validation set from initial train pool
 seed: 42 # Random seed for reproducible train/test split
 train_subdir: train
 val_subdir: validation

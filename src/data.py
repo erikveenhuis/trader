@@ -2,13 +2,10 @@ from pathlib import Path
 from typing import List
 import logging
 import random
+from .utils.logging_config import get_logger
 
-# Configure logging # REMOVED
-# logging.basicConfig(
-#     level=logging.INFO,
-#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-# )
-logger = logging.getLogger("DataManager")
+# Get logger instance
+logger = get_logger("DataManager")
 
 
 class DataManager:

@@ -1,0 +1,6 @@
+raw_dir: data/raw
+extracted_dir: data/extracted
+max_workers: 12
+clear_output: true
+filter_usd_only: true
+year_filter: null  # or e.g., '2023' 

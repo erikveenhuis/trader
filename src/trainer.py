@@ -19,9 +19,10 @@ from datetime import datetime  # Added datetime back
 from .utils.utils import set_seeds
 import yaml  # Added for config load/save
 from .constants import ACCOUNT_STATE_DIM # Import constant
+from .utils.logging_config import get_logger
 
-# Use root logger - configuration handled by main script
-logger = logging.getLogger("Trainer")
+# Get logger instance
+logger = get_logger("Trainer")
 
 
 class RainbowTrainerModule:
@@ -335,7 +336,7 @@ class RainbowTrainerModule:
         # Calculate position value in USD
         position_value = info["position"] * info["price"]
         
-        logger.info(
+        logger.debug(
             f"  Ep {episode} Step {steps_in_episode}: "
             f"Port=${info['portfolio_value']:.2f}, "
             f"Act={action}, "
@@ -356,7 +357,9 @@ class RainbowTrainerModule:
         total_rewards: list,
         episode_loss: float,
         steps_in_episode: int,
-        tracker: PerformanceTracker
+        tracker: PerformanceTracker,
+        final_info: dict,
+        invalid_action_count: int
     ):
         """Logs the summary statistics at the end of an episode."""
         current_window_size = min(self.reward_window, len(total_rewards))
@@ -373,6 +376,32 @@ class RainbowTrainerModule:
             f"Portfolio=${metrics['portfolio_value']:.2f} ({metrics['total_return']:.2f}%), "
             f"Sharpe={metrics['sharpe_ratio']:.4f}"
         )
+        # --- ADDED DETAILED EPISODE LOGGING ---
+        logger.info(f"  Ep {episode+1} Details:")
+        logger.info(f"    Steps: {steps_in_episode}")
+        logger.info(f"    Total Reward: {episode_reward:.4f}") # Increased precision
+        logger.info(f"    Initial Portfolio: ${metrics.get('initial_portfolio_value', np.nan):.2f}")
+        logger.info(f"    Final Portfolio: ${metrics.get('portfolio_value', np.nan):.2f}")
+        logger.info(f"    Total Return: {metrics.get('total_return', np.nan):.2f}%")
+        logger.info(f"    Sharpe Ratio: {metrics.get('sharpe_ratio', np.nan):.4f}")
+        logger.info(f"    Max Drawdown: {metrics.get('max_drawdown', np.nan)*100:.2f}%")
+        logger.info(f"    Action Counts: {metrics.get('action_counts', {})}")
+        logger.info(f"    Total Transaction Costs: ${metrics.get('transaction_costs', np.nan):.2f}")
+
+        # Extract final balance and calculate position value
+        final_balance = final_info.get('balance', np.nan)
+        final_position = final_info.get('position', np.nan)
+        final_price = final_info.get('price', np.nan)
+        final_position_value = final_position * final_price if not np.isnan(final_position) and not np.isnan(final_price) else np.nan
+
+        logger.info(f"    Final Balance: ${final_balance:.2f}")
+        logger.info(f"    Final Position Size: {final_position:.4f}") # Added position size
+        logger.info(f"    Final Price: ${final_price:.8f}") # Added price
+        logger.info(f"    Final Position Value: ${final_position_value:.2f}")
+        # --- END ADDED DETAIL ---
+
+        # Log invalid action count
+        logger.info(f"    Invalid Action Count: {invalid_action_count}")
 
     def _handle_validation_and_checkpointing(
         self,
@@ -959,14 +988,15 @@ class RainbowTrainerModule:
         tracker: PerformanceTracker,
         episode: int,
         total_train_steps: int,
-    ) -> Tuple[float, float, int, int]:
+    ) -> Tuple[float, float, int, int, dict, int]: # Added int for invalid count
         """Runs the steps within a single training episode using _perform_training_step."""
         done = False
         obs = initial_obs
-        info = {}
+        info = {} # Initialize info dict
         episode_reward = 0.0
         episode_loss = 0.0
         steps_in_episode = 0
+        invalid_action_count = 0 # Initialize counter
         recent_step_rewards = deque(maxlen=self.log_freq)
         recent_losses = deque(maxlen=self.log_freq // self.update_freq + 1)
 
@@ -977,6 +1007,10 @@ class RainbowTrainerModule:
             )
             done = step_done # Update loop condition
             info = step_info # Update info for logging/tracker
+
+            # Check for invalid action indicator from environment
+            if step_info.get('invalid_action', False):
+                invalid_action_count += 1
 
             # Update performance tracker
             tracker.update(
@@ -1005,7 +1039,8 @@ class RainbowTrainerModule:
 
         # Episode finished
         env.close()
-        return episode_reward, episode_loss, steps_in_episode, total_train_steps
+        # Return final info dict and invalid action count along with other values
+        return episode_reward, episode_loss, steps_in_episode, total_train_steps, info, invalid_action_count
 
     def train(
         self,
@@ -1059,7 +1094,7 @@ class RainbowTrainerModule:
                 
                 # 2. Run steps within the episode
                 # Pass the initial_obs obtained from initialization
-                episode_reward, episode_loss, steps_in_episode, total_train_steps = self._run_episode_steps(
+                episode_reward, episode_loss, steps_in_episode, total_train_steps, info, invalid_action_count = self._run_episode_steps(
                     episode_env, initial_obs, tracker, episode, total_train_steps
                 )
                 self.total_train_steps = total_train_steps # Update internal tracker
@@ -1067,7 +1102,7 @@ class RainbowTrainerModule:
                 # 3. Log episode summary
                 total_rewards.append(episode_reward)
                 self._log_episode_summary(
-                    episode, episode_reward, total_rewards, episode_loss, steps_in_episode, tracker
+                    episode, episode_reward, total_rewards, episode_loss, steps_in_episode, tracker, info, invalid_action_count
                 )
 
                 # 4. Handle validation and checkpointing

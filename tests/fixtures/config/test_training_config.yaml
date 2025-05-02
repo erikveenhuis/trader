@@ -36,7 +36,8 @@ agent:
 environment:
   initial_balance: 10000.0
   transaction_fee: 0.001
-  reward_scale: 500.0 # Scale factor for PnL component of reward (if used)
+  reward_scale: 10.0 # Scale factor for PnL component of reward (if used)
+  invalid_action_penalty: -0.1 # Penalty for invalid actions
 
 trainer:
   seed: 42

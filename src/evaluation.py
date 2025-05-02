@@ -1,3 +1,4 @@
+import torch
 import numpy as np
 import logging
 from pathlib import Path
@@ -13,8 +14,10 @@ from trading_env import TradingEnv, TradingEnvConfig
 from .data import DataManager
 from .utils.utils import set_seeds
 from .metrics import PerformanceTracker, calculate_episode_score
+from .utils.logging_config import get_logger
 
-logger = logging.getLogger("Evaluation")
+# Get logger instance
+logger = get_logger("Evaluation")
 
 
 def evaluate_on_test_data(

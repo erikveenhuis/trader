@@ -2,6 +2,11 @@ import torch
 import numpy as np
 from collections import deque, namedtuple
 import random
+import logging
+from .utils.logging_config import get_logger
+
+# Get logger instance
+logger = get_logger("Buffer")
 
 # Define Experience namedtuple at module level for pickling (Copied from agent.py)
 Experience = namedtuple(

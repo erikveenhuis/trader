@@ -1,8 +1,11 @@
 import numpy as np
-from typing import List, Dict
+import pandas as pd
+from typing import List, Dict, Any
 import logging
+from .utils.logging_config import get_logger
 
-logger = logging.getLogger("Metrics")
+# Get logger instance
+logger = get_logger("Metrics")
 
 
 def calculate_sharpe_ratio(returns: List[float], risk_free_rate: float = 0.02) -> float:
@@ -216,6 +219,7 @@ class PerformanceTracker:
         ), "Initial portfolio value must be positive to calculate return"
 
         metrics = {
+            "initial_portfolio_value": self.portfolio_values[0],
             "portfolio_value": self.portfolio_values[-1],
             "total_return": (self.portfolio_values[-1] / self.portfolio_values[0] - 1)
             * 100,
