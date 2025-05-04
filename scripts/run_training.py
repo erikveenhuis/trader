@@ -9,9 +9,13 @@ import torch
 import numpy as np
 import yaml  # Added for config loading
 import argparse  # Added for command-line arguments
+import time # Added for timestamping log directories
 # --- Add AMP imports ---
 from torch.cuda.amp import GradScaler, autocast
 # ---------------------
+# --- Add TensorBoard import ---
+from torch.utils.tensorboard import SummaryWriter
+# ---------------------------
 
 # Add project root to the Python path
 project_root = Path(__file__).resolve().parent.parent
@@ -93,6 +97,15 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
         scaler = GradScaler()
         logger.info("Initialized GradScaler for Automatic Mixed Precision (AMP).")
     # --------------------------------------------------
+
+    # --- Initialize TensorBoard Writer ---
+    log_dir_base = Path(model_dir) / "runs"
+    # Create a unique directory name using a timestamp
+    current_time = time.strftime("%Y%m%d-%H%M%S")
+    log_dir = log_dir_base / current_time
+    writer = SummaryWriter(log_dir=str(log_dir))
+    logger.info(f"TensorBoard logs will be saved to: {log_dir}")
+    # ----------------------------------
 
     # Agent class is fixed for this script
     AgentClass = RainbowDQNAgent
@@ -202,7 +215,8 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
         device=device,
         data_manager=data_manager,
         config=config,  # Pass the full config to the trainer
-        scaler=scaler # Pass scaler to Trainer constructor
+        scaler=scaler, # Pass scaler to Trainer constructor
+        writer=writer  # Pass the TensorBoard writer
         # Remove handler passing, as root logger handles it now
         # train_log_handler=train_log_handler,
         # validation_log_handler=validation_log_handler
@@ -258,6 +272,11 @@ def run_training(config: dict, data_manager: DataManager, resume_training_flag: 
         initial_env.close()
     except Exception:
         pass  # Ignore errors closing env that might already be closed
+
+    # --- Close TensorBoard Writer ---
+    writer.close()
+    logger.info("TensorBoard writer closed.")
+    # -----------------------------
 
     return agent, trainer
 

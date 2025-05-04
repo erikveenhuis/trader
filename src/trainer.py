@@ -20,6 +20,7 @@ from .utils.utils import set_seeds
 import yaml  # Added for config load/save
 from .constants import ACCOUNT_STATE_DIM # Import constant
 from .utils.logging_config import get_logger
+from torch.utils.tensorboard import SummaryWriter
 
 # Get logger instance
 logger = get_logger("Trainer")
@@ -33,6 +34,7 @@ class RainbowTrainerModule:
         data_manager: DataManager,
         config: dict,
         scaler: GradScaler | None = None,
+        writer: SummaryWriter | None = None,
     ):
         assert isinstance(
             agent, RainbowDQNAgent
@@ -52,6 +54,7 @@ class RainbowTrainerModule:
         self.run_config = config.get("run", {})
         self.scaler = scaler
         self.best_validation_metric = -np.inf
+        self.writer = writer
         # Adjust path prefix for Rainbow models
         self.best_model_base_prefix = str(
             Path(self.run_config.get("model_dir", "models"))
@@ -80,7 +83,7 @@ class RainbowTrainerModule:
         self.checkpoint_save_freq = self.trainer_config.get("checkpoint_save_freq", 10)
         self.reward_window = self.trainer_config.get("reward_window", 10)
         self.update_freq = self.trainer_config.get("update_freq", 4)
-        self.log_freq = self.trainer_config.get("log_freq", 60)
+        self.log_freq = self.trainer_config.get("log_freq", 100)
         self.warmup_steps = self.trainer_config.get("warmup_steps", 50000)
         # Extract run parameters
         self.model_dir = self.run_config.get("model_dir", "models")
@@ -312,6 +315,12 @@ class RainbowTrainerModule:
                     # Add gradient clipping
                     torch.nn.utils.clip_grad_norm_(self.agent.network.parameters(), max_norm=1.0)
                     loss_value = self.agent.learn()
+                    
+                    # --- Log Loss to TensorBoard --- #
+                    if self.writer and loss_value is not None:
+                         self.writer.add_scalar("Train/Loss", loss_value, total_train_steps)
+                    # ---------------------------- #
+                    
                 except Exception as e:
                     logger.error(f"!!! EXCEPTION during learning update at step {total_train_steps} !!!", exc_info=True)
                     done = True # Stop episode on learning error
@@ -362,46 +371,37 @@ class RainbowTrainerModule:
         invalid_action_count: int
     ):
         """Logs the summary statistics at the end of an episode."""
-        current_window_size = min(self.reward_window, len(total_rewards))
-        recent_avg_reward = np.mean(total_rewards[-current_window_size:])
-        avg_loss = (
-            episode_loss / (steps_in_episode / self.update_freq)
-            if steps_in_episode > 0 and episode_loss != 0
-            else 0
-        )
+        avg_reward_window = np.mean(total_rewards[-self.reward_window :])
+        avg_reward_total = np.mean(total_rewards)
+        logger.info(f"Episode {episode + 1}: Ended.")
+        logger.info(f"  Steps: {steps_in_episode}")
+        logger.info(f"  Reward: {episode_reward:.4f}")
+        logger.info(f"  Avg Reward ({self.reward_window} ep): {avg_reward_window:.4f}")
+        logger.info(f"  Avg Reward (Total): {avg_reward_total:.4f}")
+        logger.info(f"  Avg Loss: {(episode_loss / (steps_in_episode / self.update_freq)) if steps_in_episode > 0 else 0:.4f}") # Adjust loss averaging
+        logger.info(f"  Invalid Actions: {invalid_action_count}")
+        logger.info(f"  Final Portfolio Value: ${final_info.get('portfolio_value', -1):.2f}")
+        logger.info(f"  Final Position: {final_info.get('position', -1):.4f}")
+        # tracker.log_summary(logger, episode + 1) # Original line causing error
+        # --- Log tracker metrics --- #
         metrics = tracker.get_metrics()
-        logger.info(
-            f"Ep {episode+1}: Reward={episode_reward:.2f}, Mean-{current_window_size}={recent_avg_reward:.2f}, "
-            f"Loss={avg_loss:.4f}, "
-            f"Portfolio=${metrics['portfolio_value']:.2f} ({metrics['total_return']:.2f}%), "
-            f"Sharpe={metrics['sharpe_ratio']:.4f}"
-        )
-        # --- ADDED DETAILED EPISODE LOGGING ---
-        logger.info(f"  Ep {episode+1} Details:")
-        logger.info(f"    Steps: {steps_in_episode}")
-        logger.info(f"    Total Reward: {episode_reward:.4f}") # Increased precision
-        logger.info(f"    Initial Portfolio: ${metrics.get('initial_portfolio_value', np.nan):.2f}")
-        logger.info(f"    Final Portfolio: ${metrics.get('portfolio_value', np.nan):.2f}")
-        logger.info(f"    Total Return: {metrics.get('total_return', np.nan):.2f}%")
-        logger.info(f"    Sharpe Ratio: {metrics.get('sharpe_ratio', np.nan):.4f}")
-        logger.info(f"    Max Drawdown: {metrics.get('max_drawdown', np.nan)*100:.2f}%")
-        logger.info(f"    Action Counts: {metrics.get('action_counts', {})}")
-        logger.info(f"    Total Transaction Costs: ${metrics.get('transaction_costs', np.nan):.2f}")
+        logger.info(f"  Metrics - Total Return: {metrics.get('total_return', np.nan):.2f}%" if metrics else "Metrics: N/A")
+        logger.info(f"  Metrics - Sharpe Ratio: {metrics.get('sharpe_ratio', np.nan):.4f}" if metrics else "Metrics: N/A")
+        logger.info(f"  Metrics - Max Drawdown: {metrics.get('max_drawdown', np.nan)*100:.2f}%" if metrics else "Metrics: N/A")
+        logger.info(f"  Metrics - Action Counts: {metrics.get('action_counts', {})}" if metrics else "Metrics: N/A")
+        logger.info(f"  Metrics - Transaction Costs: ${metrics.get('transaction_costs', np.nan):.2f}" if metrics else "Metrics: N/A")
+        # ------------------------- #
 
-        # Extract final balance and calculate position value
-        final_balance = final_info.get('balance', np.nan)
-        final_position = final_info.get('position', np.nan)
-        final_price = final_info.get('price', np.nan)
-        final_position_value = final_position * final_price if not np.isnan(final_position) and not np.isnan(final_price) else np.nan
-
-        logger.info(f"    Final Balance: ${final_balance:.2f}")
-        logger.info(f"    Final Position Size: {final_position:.4f}") # Added position size
-        logger.info(f"    Final Price: ${final_price:.8f}") # Added price
-        logger.info(f"    Final Position Value: ${final_position_value:.2f}")
-        # --- END ADDED DETAIL ---
-
-        # Log invalid action count
-        logger.info(f"    Invalid Action Count: {invalid_action_count}")
+        # --- Log Episode Summary to TensorBoard --- #
+        if self.writer:
+            self.writer.add_scalar("Train/Episode Reward", episode_reward, episode)
+            self.writer.add_scalar(f"Train/Average Reward ({self.reward_window} ep)", avg_reward_window, episode)
+            self.writer.add_scalar("Train/Steps per Episode", steps_in_episode, episode)
+            self.writer.add_scalar("Environment/Invalid Actions per Episode", invalid_action_count, episode)
+            if steps_in_episode > 0:
+                avg_episode_loss = episode_loss / (steps_in_episode / self.update_freq + 1e-6) # Avoid div by zero
+                self.writer.add_scalar("Train/Average Episode Loss", avg_episode_loss, episode)
+        # ------------------------------------------ #
 
     def _handle_validation_and_checkpointing(
         self,
@@ -438,6 +438,11 @@ class RainbowTrainerModule:
             else:
                 logger.info("  No improvement over previous best model")
 
+            # --- Log Validation Score to TensorBoard --- #
+            if self.writer:
+                self.writer.add_scalar("Validation/Score", validation_score, episode)
+            # ------------------------------------------ #
+
             # Save checkpoint AFTER validation
             self._save_checkpoint(
                 episode=episode + 1,
@@ -459,6 +464,29 @@ class RainbowTrainerModule:
                 is_best=False, # Not necessarily the best if saved periodically
                 validation_score=None # No relevant score for periodic save
             )
+
+        # --- Final HParams log (optional but good practice) --- # 
+        # if self.writer: # <-- Comment out the entire block
+        #     hparams = {
+        #         # Add key hyperparameters from config
+        #         'lr': self.agent_config.get('lr'),
+        #         'gamma': self.agent_config.get('gamma'),
+        #         'batch_size': self.agent_config.get('batch_size'),
+        #         'target_update_freq': self.agent_config.get('target_update_freq'),
+        #         'window_size': self.env_config.get('window_size'),
+        #         'n_steps': self.agent_config.get('n_steps'),
+        #         'num_atoms': self.agent_config.get('num_atoms'),
+        #         # Add more relevant hparams
+        #     }
+        #     final_metrics = {
+        #         # Log final/best metrics
+        #         'hparam/best_validation_score': self.best_validation_metric if self.best_validation_metric > -np.inf else np.nan,
+        #         # 'hparam/final_avg_reward': np.mean(total_rewards[-self.reward_window:] if total_rewards else np.nan),
+        #     }
+        #     # Filter out None values from hparams before logging
+        #     hparams_filtered = {k: v for k, v in hparams.items() if v is not None}
+        #     self.writer.add_hparams(hparams_filtered, final_metrics)
+        # ------------------------------------------------------ #
 
         return False # Continue training
 
