@@ -15,6 +15,7 @@ src/trader.egg-info/dependency_links.txt
 src/trader.egg-info/requires.txt
 src/trader.egg-info/top_level.txt
 src/utils/checkpoint_utils.py
+src/utils/logging_config.py
 src/utils/utils.py
 tests/test_agent.py
 tests/test_buffer.py

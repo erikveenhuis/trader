@@ -12,7 +12,7 @@ dependencies = [
     "PyYAML==6.0.2",
     "scikit-learn",
     "torch==2.7.0",
-    "trading_env==0.1.4"
+    "trading_env==0.1.5"
 ]
 
 [project.optional-dependencies]

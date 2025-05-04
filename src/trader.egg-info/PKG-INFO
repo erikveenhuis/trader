@@ -7,7 +7,7 @@ Requires-Dist: pandas==2.2.3
 Requires-Dist: PyYAML==6.0.2
 Requires-Dist: scikit-learn
 Requires-Dist: torch==2.7.0
-Requires-Dist: trading_env==0.1.4
+Requires-Dist: trading_env==0.1.5
 Provides-Extra: dev
 Requires-Dist: flake8>=7.0.0; extra == "dev"
 Requires-Dist: black>=24.0.0; extra == "dev"
