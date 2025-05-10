@@ -29,7 +29,7 @@ except ImportError:
 # Import shared functions/constants
 try:
     # Import detect_anomalies and PRICE_COLS
-    from .data_utils import clear_directory, detect_anomalies, PRICE_COLS
+    from .data_utils import clear_directory, detect_anomalies, detect_ohlc_range_anomalies, PRICE_COLS
 except ImportError:
     logging.error("Could not import utility functions from data_utils. Ensure the file exists in the same directory.")
     sys.exit(1)
@@ -62,6 +62,8 @@ def extract_gz_and_split_by_ticker(
     # Add anomaly filter parameters
     filter_anomalies: bool,
     anomaly_threshold: float,
+    ohlc_range_anomaly_threshold: float,
+    ohlc_range_anomaly_occurrence_threshold: int,
     # Add exclude_tickers list parameter
     exclude_tickers: List[str]
 ) -> Tuple[int, int, int, int, int, int, int]:
@@ -78,7 +80,9 @@ def extract_gz_and_split_by_ticker(
         filter_complete_days (bool): If True, only process days with at least exact_datapoints.
         exact_datapoints (int): Minimum number of data points required for a day to be considered complete.
         filter_anomalies (bool): If True, filter based on anomaly detection.
-        anomaly_threshold (float): Threshold for anomaly detection.
+        anomaly_threshold (float): Threshold for Z-score anomaly detection.
+        ohlc_range_anomaly_threshold (float): Threshold for OHLC range anomaly detection ((high-low)/high).
+        ohlc_range_anomaly_occurrence_threshold (int): Min occurrences for OHLC range anomaly to flag file.
         exclude_tickers (List[str]): List of tickers to exclude.
 
     Returns:
@@ -207,15 +211,31 @@ def extract_gz_and_split_by_ticker(
                 # Group by the original dataframe BUT only check groups we intend to keep
                 grouped = df[df.set_index(['date', 'ticker']).index.isin(indices_to_keep)].groupby(['date', 'ticker'])
                 for index, group_df in grouped:
-                    if detect_anomalies(group_df, anomaly_threshold):
+                    is_anomalous_zscore = detect_anomalies(group_df, anomaly_threshold)
+                    is_anomalous_ohlc_range = detect_ohlc_range_anomalies(
+                        group_df, 
+                        ohlc_range_anomaly_threshold, 
+                        ohlc_range_anomaly_occurrence_threshold
+                    )
+                    
+                    if is_anomalous_zscore or is_anomalous_ohlc_range:
                         anomalous_indices.add(index)
+                        # Log which filter caught it for better debugging
+                        reason_parts = []
+                        if is_anomalous_zscore:
+                            reason_parts.append(f"Z-score (std_dev>{anomaly_threshold})")
+                        if is_anomalous_ohlc_range:
+                            reason_parts.append(f"OHLC range (range>{ohlc_range_anomaly_threshold*100}% in >{ohlc_range_anomaly_occurrence_threshold} candles)")
+                        skipped_reasons[index] = f"Anomaly ({'; '.join(reason_parts)})"
+                        # The skipped_anomalous_count will be incremented later if this is the primary skip reason
 
                 for idx in anomalous_indices:
                     if idx in indices_to_keep:
                         indices_to_keep.remove(idx)
-                        if idx not in skipped_reasons:
-                            skipped_reasons[idx] = f"Anomaly (threshold {anomaly_threshold})"
-                            skipped_anomalous_count += 1 # Increment counter only if this is primary reason
+                        if idx not in skipped_reasons: # Should have been added above with details
+                            # This case might not be strictly necessary if skipped_reasons is always populated above
+                            skipped_reasons[idx] = f"Anomaly (mixed criteria)" 
+                        skipped_anomalous_count += 1 # Increment counter only if this is primary reason
                 # Keep debug log for marking
                 if anomalous_indices:
                     logger.debug(f"[{input_gz_path.name}] Marked {len(anomalous_indices)} combos as anomalous.")
@@ -230,13 +250,13 @@ def extract_gz_and_split_by_ticker(
             # if skipped_anomalous_count > 0: logger.info(f"    - Reason Anomaly: {skipped_anomalous_count}")
             # if skipped_excluded_ticker_count > 0: logger.info(f"    - Reason Excluded Ticker: {skipped_excluded_ticker_count}") # Added reason log
 
-            logger.debug(f"[{input_gz_path.name}] Individual skip details ({len(skipped_indices)} total):")
+            logger.info(f"[{input_gz_path.name}] Individual skip details ({len(skipped_indices)} total):")
             sorted_skips = sorted(list(skipped_indices))
             for idx in sorted_skips:
                 reason = skipped_reasons.get(idx, "Unknown reason")
                 date_str = idx[0].strftime('%Y-%m-%d')
                 ticker_str = idx[1]
-                logger.debug(f"    - Skipped: {date_str}_{ticker_str}.csv | Reason: {reason}")
+                logger.info(f"    - Skipped: {date_str}_{ticker_str}.csv | Reason: {reason}")
 
         # --- Filter DataFrame and Save Kept Files ---
         if not indices_to_keep:
@@ -310,10 +330,27 @@ def run_extraction(
     year_filter: Optional[str],
     # Add exclude_tickers list parameter
     exclude_tickers: List[str],
+    ohlc_range_anomaly_threshold: float,
+    ohlc_range_anomaly_occurrence_threshold: int,
 ):
     """
     Finds raw .csv.gz files and runs the extraction process in parallel.
     Sets up logging queue using Manager for worker processes.
+
+    Args:
+        raw_dir (str): Directory containing raw .csv.gz files.
+        extracted_dir (str): Directory to save extracted files.
+        max_workers (int): Number of parallel workers.
+        clear_output (bool): Whether to clear the output directory before extraction.
+        filter_usd_only (bool): Only process tickers ending in "-USD".
+        filter_complete_days (bool): Only process days with exact datapoints.
+        exact_datapoints (int): Number of expected datapoints per day.
+        filter_anomalies (bool): Whether to filter anomalies.
+        anomaly_threshold (float): Z-score threshold for anomaly detection.
+        year_filter (Optional[str]): Year to filter files by.
+        exclude_tickers (List[str]): List of tickers to exclude.
+        ohlc_range_anomaly_threshold (float): Threshold for OHLC range anomaly detection ((high-low)/high).
+        ohlc_range_anomaly_occurrence_threshold (int): Min occurrences for OHLC range anomaly to flag file.
     """
     # Use the main process logger instance
     logger = logging.getLogger("ExtractRawData")
@@ -389,6 +426,8 @@ def run_extraction(
                         exact_datapoints,
                         filter_anomalies,
                         anomaly_threshold,
+                        ohlc_range_anomaly_threshold,
+                        ohlc_range_anomaly_occurrence_threshold,
                         exclude_tickers # Pass the exclude list
                     ): file
                     for file in files_to_process
@@ -506,6 +545,9 @@ if __name__ == "__main__":
         year_filter = config.get("year_filter", None) # Default to None
         # Load optional exclude_tickers list
         exclude_tickers = config.get("exclude_tickers", []) # Default to empty list
+        # Load new parameters
+        ohlc_range_anomaly_threshold = config.get("ohlc_range_anomaly_threshold", 0.1)
+        ohlc_range_anomaly_occurrence_threshold = config.get("ohlc_range_anomaly_occurrence_threshold", 3)
 
     except KeyError as e:
         logger.error(f"Missing required configuration parameter in {config_path}: {e}")
@@ -534,6 +576,8 @@ if __name__ == "__main__":
         anomaly_threshold=anomaly_threshold,
         year_filter=year_filter,
         exclude_tickers=exclude_tickers, # Pass the exclude list
+        ohlc_range_anomaly_threshold=ohlc_range_anomaly_threshold,
+        ohlc_range_anomaly_occurrence_threshold=ohlc_range_anomaly_occurrence_threshold,
     )
 
     logger.info("Extraction script finished.") 

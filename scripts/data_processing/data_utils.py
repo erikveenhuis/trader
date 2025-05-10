@@ -125,3 +125,55 @@ def detect_anomalies(df: pd.DataFrame, threshold: float) -> bool:
     except Exception as e:
         logger.error(f"Error during anomaly detection: {e}")
         return False # Assume not anomalous on error 
+
+def detect_ohlc_range_anomalies(df: pd.DataFrame, 
+                                range_threshold: float, 
+                                occurrence_threshold: int) -> bool:
+    """
+    Detects anomalies based on the intra-candle range (high - low) / high.
+    Flags the DataFrame as anomalous if the number of such candles exceeds 
+    the occurrence_threshold.
+    """
+    try:
+        if not all(col in df.columns for col in ['high', 'low']):
+            logger.warning("Cannot detect OHLC range anomalies: Missing 'high' or 'low' column.")
+            return False # Cannot determine
+
+        if df[['high', 'low']].isnull().any().any():
+            logger.debug("Dropping rows with NaN in high/low for OHLC range anomaly check.")
+            # Create a copy to avoid SettingWithCopyWarning if df is a slice
+            df_checked = df.dropna(subset=['high', 'low']).copy() 
+        else:
+            df_checked = df.copy() # Use a copy to add new column safely
+
+        if df_checked.empty:
+            return False # No data to check
+
+        # Avoid division by zero or very small 'high' values leading to huge ratios
+        # Replace 'high' values that are zero or very close to zero with np.nan
+        # so they are ignored in the percentage calculation or result in NaN percentage_range
+        df_checked['high_safe'] = df_checked['high'].replace(0, np.nan)
+        # Set 'high_safe' to np.nan if it's too close to zero to avoid extreme ratios
+        df_checked.loc[np.abs(df_checked['high_safe']) < 1e-9, 'high_safe'] = np.nan
+        
+        # Calculate percentage range, will be NaN if high_safe is NaN (e.g. original high was 0 or too small)
+        df_checked['percentage_range'] = (df_checked['high'] - df_checked['low']) / df_checked['high_safe']
+
+        # Count anomalies:
+        # - percentage_range is not NaN (i.e., high_safe was valid)
+        # - percentage_range exceeds the threshold
+        # - low must not be greater than high (basic sanity check)
+        anomalous_candles_count = df_checked[
+            (df_checked['percentage_range'].notna()) &
+            (df_checked['percentage_range'] > range_threshold) &
+            (df_checked['low'] <= df_checked['high']) # Ensure low is not above high
+        ].shape[0]
+
+        if anomalous_candles_count > occurrence_threshold:
+            logger.debug(f"Detected {anomalous_candles_count} OHLC range anomalies, exceeding threshold of {occurrence_threshold}.")
+            return True
+        return False
+
+    except Exception as e:
+        logger.error(f"Error during OHLC range anomaly detection: {e}")
+        return False # Assume not anomalous on error 

@@ -139,6 +139,9 @@ class RainbowTrainerModule:
             "target_network_state_dict": self.agent.target_network.state_dict() if self.agent.target_network else None,
             "optimizer_state_dict": self.agent.optimizer.state_dict() if self.agent.optimizer else None,
             "scaler_state_dict": self.scaler.state_dict() if self.scaler else None,
+            # --- ADDED Scheduler State ---
+            "scheduler_state_dict": self.agent.scheduler.state_dict() if self.agent.scheduler and self.agent.lr_scheduler_enabled else None,
+            # --- END ADDED Scheduler State ---
             # --- END ADDED Agent State ---
         }
 
@@ -313,7 +316,6 @@ class RainbowTrainerModule:
             ):
                 try:
                     # Add gradient clipping
-                    torch.nn.utils.clip_grad_norm_(self.agent.network.parameters(), max_norm=1.0)
                     loss_value = self.agent.learn()
                     
                     # --- Log Loss to TensorBoard --- #
@@ -396,11 +398,28 @@ class RainbowTrainerModule:
         if self.writer:
             self.writer.add_scalar("Train/Episode Reward", episode_reward, episode)
             self.writer.add_scalar(f"Train/Average Reward ({self.reward_window} ep)", avg_reward_window, episode)
-            self.writer.add_scalar("Train/Steps per Episode", steps_in_episode, episode)
             self.writer.add_scalar("Environment/Invalid Actions per Episode", invalid_action_count, episode)
             if steps_in_episode > 0:
                 avg_episode_loss = episode_loss / (steps_in_episode / self.update_freq + 1e-6) # Avoid div by zero
                 self.writer.add_scalar("Train/Average Episode Loss", avg_episode_loss, episode)
+
+            # Add new metrics from final_info and tracker.get_metrics()
+            self.writer.add_scalar("Train/Final Portfolio Value", final_info.get('portfolio_value', np.nan), episode)
+            self.writer.add_scalar("Train/Final Position", final_info.get('position', np.nan), episode)
+
+            if metrics: # Ensure metrics dict is not empty
+                self.writer.add_scalar("Train/Total Return Pct", metrics.get('total_return', np.nan), episode)
+                self.writer.add_scalar("Train/Sharpe Ratio", metrics.get('sharpe_ratio', np.nan), episode)
+                # Max drawdown is usually negative or zero, store as positive percentage for clarity if convention is to show magnitude
+                self.writer.add_scalar("Train/Max Drawdown Pct", metrics.get('max_drawdown', np.nan) * 100, episode)
+                self.writer.add_scalar("Train/Transaction Costs", metrics.get('transaction_costs', np.nan), episode)
+
+                action_counts = metrics.get('action_counts', {})
+                if isinstance(action_counts, dict):
+                    for action_label, count in action_counts.items():
+                        # Ensure action_label is a string, replace spaces for valid tag names
+                        tag_label = str(action_label).replace(" ", "_")
+                        self.writer.add_scalar(f"Train/Action Count - {tag_label}", count, episode)
         # ------------------------------------------ #
 
     def _handle_validation_and_checkpointing(
@@ -415,33 +434,70 @@ class RainbowTrainerModule:
         should_stop_training = False
         is_best = False
         validation_score = -np.inf # Default score
+        avg_val_metrics = {} # Initialize to empty dict
+
+        # Store old best score for "is_best" decision
+        old_best_validation_metric = self.best_validation_metric
 
         # Run validation if needed
         if val_files and self.should_validate(episode, tracker.get_recent_metrics()):
             try:
                 logger.info(f"--- Running validation after episode {episode + 1} ---")
-                should_stop_training, validation_score = self.validate(val_files)
+                # MODIFIED: Capture avg_val_metrics
+                should_stop_training, validation_score, avg_val_metrics = self.validate(val_files)
             except Exception as e:
                 logger.error(f"Exception during validation after episode {episode}: {e}", exc_info=True)
                 should_stop_training = False # Don't stop on validation error
                 validation_score = -np.inf
+                avg_val_metrics = {} # Ensure it's defined for logging below
 
             logger.info("Validation Score Comparison:")
             logger.info(f"  Current Score: {validation_score:.4f}")
-            logger.info(f"  Previous Best: {self.best_validation_metric:.4f}")
+            # self.best_validation_metric is updated by self.validate() if score improved
+            logger.info(f"  Best Tracked Score (after this validation): {self.best_validation_metric:.4f}")
+            logger.info(f"  Best Tracked Score (before this validation): {old_best_validation_metric:.4f}")
 
-            if validation_score > self.best_validation_metric:
-                is_best = True
-                self.best_validation_metric = validation_score
-                logger.info("  >>> NEW BEST CHECKPOINT (will be saved) <<< ")
-                logger.info(f"  Score: {validation_score:.4f}")
+
+            # MODIFIED: Corrected is_best determination
+            # An improvement is "best" if it's better than the old best by at least the threshold.
+            # self.best_validation_metric has already been updated by validate() if validation_score was strictly > old_best_validation_metric.
+            if validation_score > old_best_validation_metric + self.min_validation_threshold:
+                 is_best = True
+                 # self.best_validation_metric is already updated by validate() to validation_score
+                 logger.info(f"  >>> NEW BEST CHECKPOINT (Score: {validation_score:.4f} > Old best: {old_best_validation_metric:.4f} + Threshold: {self.min_validation_threshold}) <<< ")
             else:
-                logger.info("  No improvement over previous best model")
+                 is_best = False
+                 logger.info(f"  No improvement for best checkpoint (Current: {validation_score:.4f}, Best tracked: {self.best_validation_metric:.4f}, Old best for this run: {old_best_validation_metric:.4f}, Threshold: {self.min_validation_threshold})")
 
-            # --- Log Validation Score to TensorBoard --- #
+
+            # --- Log Validation Score and Metrics to TensorBoard --- #
             if self.writer:
                 self.writer.add_scalar("Validation/Score", validation_score, episode)
-            # ------------------------------------------ #
+                # MODIFIED: Log average validation metrics
+                if avg_val_metrics: # Check if metrics are available
+                    self.writer.add_scalar("Validation/Average_Reward", avg_val_metrics.get('avg_reward', np.nan), episode)
+                    self.writer.add_scalar("Validation/Average_Portfolio_Value", avg_val_metrics.get('portfolio_value', np.nan), episode)
+                    self.writer.add_scalar("Validation/Average_Total_Return_Pct", avg_val_metrics.get('total_return', np.nan), episode)
+                    self.writer.add_scalar("Validation/Average_Sharpe_Ratio", avg_val_metrics.get('sharpe_ratio', np.nan), episode)
+                    # Max drawdown is a fraction, convert to percentage for logging
+                    self.writer.add_scalar("Validation/Average_Max_Drawdown_Pct", avg_val_metrics.get('max_drawdown', np.nan) * 100, episode)
+                    self.writer.add_scalar("Validation/Average_Transaction_Costs", avg_val_metrics.get('transaction_costs', np.nan), episode)
+            # ---------------------------------------------------- #
+
+            # --- Step LR Scheduler if it's ReduceLROnPlateau --- #
+            if self.agent.lr_scheduler_enabled and isinstance(self.agent.scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
+                if validation_score != -np.inf: # Only step if validation score is valid
+                    current_lr = self.agent.optimizer.param_groups[0]['lr']
+                    logger.info(f"[LR Scheduler] Before step: LR={current_lr:.8f}, metric={validation_score:.6f}")
+                    self.agent.step_lr_scheduler(validation_score)
+                    new_lr = self.agent.optimizer.param_groups[0]['lr']
+                    logger.info(f"[LR Scheduler] After step: LR={new_lr:.8f}, metric={validation_score:.6f}")
+                    # Log current learning rate to TensorBoard after potential step
+                    if self.writer:
+                        self.writer.add_scalar("Train/Learning_Rate", new_lr, total_train_steps) # Use total_train_steps or episode
+                else:
+                    logger.warning("Skipping ReduceLROnPlateau step due to invalid validation score (-np.inf).")
+            # ---------------------------------------------------- #
 
             # Save checkpoint AFTER validation
             self._save_checkpoint(
@@ -505,6 +561,22 @@ class RainbowTrainerModule:
 
         logger.info("====== RAINBOW DQN TRAINING COMPLETED ======")
         logger.info(f"Total steps: {total_train_steps}")
+
+        # --- ADDED: Log N-step reward statistics ---
+        if hasattr(self.agent, 'observed_n_step_rewards_history') and self.agent.observed_n_step_rewards_history:
+            rewards_history = np.array(self.agent.observed_n_step_rewards_history)
+            logger.info("--- N-Step Reward Statistics (Full Training Run) ---")
+            logger.info(f"  Count: {len(rewards_history)}")
+            logger.info(f"  Min: {np.min(rewards_history):.4f}")
+            logger.info(f"  Max: {np.max(rewards_history):.4f}")
+            logger.info(f"  Mean: {np.mean(rewards_history):.4f}")
+            logger.info(f"  Median: {np.median(rewards_history):.4f}")
+            logger.info(f"  5th Percentile: {np.percentile(rewards_history, 5):.4f}")
+            logger.info(f"  95th Percentile: {np.percentile(rewards_history, 95):.4f}")
+            logger.info(f"  Std Dev: {np.std(rewards_history):.4f}")
+        else:
+            logger.info("--- N-Step Reward Statistics: No history collected or attribute not found. ---")
+        # --- END ADDED ---
 
         # Log best validation score achieved during training
         if val_files and self.best_validation_metric > -np.inf:
@@ -841,15 +913,15 @@ class RainbowTrainerModule:
         return should_stop
     # --- End Validation Helper Methods ---
 
-    def validate(self, val_files: List[Path]) -> Tuple[bool, float]:
+    def validate(self, val_files: List[Path]) -> Tuple[bool, float, dict]: # MODIFIED: Added dict for avg_metrics
         """Run validation on validation files using helper methods, log, and check for early stopping."""
 
         # Handle empty validation file list
         if not val_files:
             logger.warning(
-                "validate() called with empty val_files list. Returning default score -inf."
+                "validate() called with empty val_files list. Returning default score -inf and empty metrics."
             )
-            return False, -np.inf  # No early stopping, worst possible score
+            return False, -np.inf, {}  # MODIFIED: Return empty dict for avg_metrics
 
         all_file_metrics = []
         detailed_results = []
@@ -910,12 +982,12 @@ class RainbowTrainerModule:
             # 6. Check for early stopping
             should_stop = self._check_early_stopping(validation_score)
 
-            return should_stop, validation_score
+            return should_stop, validation_score, avg_metrics # MODIFIED: Return avg_metrics
 
         except Exception as e:
             # Catch unexpected errors in the main validation orchestration
             logger.error(f"Unexpected error during main validation process: {e}", exc_info=True)
-            return False, -np.inf # Don't stop, return worst score
+            return False, -np.inf, {} # MODIFIED: Return empty dict for avg_metrics
 
     def _get_fallback_info(self, last_obs: dict, last_info: dict) -> dict:
         """Provides a fallback info dictionary if env.step crashes."""

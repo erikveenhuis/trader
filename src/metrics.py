@@ -107,9 +107,13 @@ def calculate_episode_score(metrics: Dict[str, float]) -> float:
     max_drawdown = metrics.get("max_drawdown", 1.0)
 
     # --- Normalization using Sigmoid: 1 / (1 + exp(-x)) ---
+    # Introduce scaling factors for Sharpe and Total Return to increase sensitivity
+    k_sharpe = 10.0  # Scaling factor for Sharpe Ratio
+    k_return = 30.0  # Scaling factor for Total Return
+
     # Maps values to (0, 1). 0 -> 0.5, positive -> >0.5, negative -> <0.5
-    normalized_sharpe = 1.0 / (1.0 + np.exp(-sharpe))
-    normalized_total_return = 1.0 / (1.0 + np.exp(-total_return_pct))
+    normalized_sharpe = 1.0 / (1.0 + np.exp(-k_sharpe * sharpe))
+    normalized_total_return = 1.0 / (1.0 + np.exp(-k_return * total_return_pct))
     # (1 - max_drawdown) is already effectively normalized in [0, 1]
     normalized_drawdown_complement = 1.0 - max_drawdown
 
